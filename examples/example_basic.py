@@ -161,21 +161,32 @@ def run_dpa_on_dataset(name, X, y_true, Z=2.0, save_plots=True):
     }
 
 
-def z_parameter_study(X, y_true, name):
-    """Study effect of Z parameter."""
-    print(f"\nZ Parameter Study for {name}:")
-    print("   Z    | Clusters | Halo pts | ARI   | NMI")
-    print("   -----|----------|----------|-------|------")
+def z_parameter_study(X, y_true, name, distances=None, indices=None):
+    """
+    Study effect of Z parameter using OPTIMIZED method.
 
-    results = []
-    for Z in [1.0, 1.5, 2.0, 2.5, 3.0]:
-        dpa = DPA(Z=Z, halo=True)
-        dpa.fit(X)
-        ari = adjusted_rand_score(y_true, dpa.labels_full_)
-        nmi = normalized_mutual_info_score(y_true, dpa.labels_full_)
-        n_halo = np.sum(dpa.halo_mask_)
-        print(f"   {Z:.1f}  | {dpa.n_clusters_:^8} | {n_halo:^8} | {ari:.3f} | {nmi:.3f}")
-        results.append({'Z': Z, 'clusters': dpa.n_clusters_, 'ari': ari, 'nmi': nmi})
+    Computes k-NN and densities only ONCE, then re-runs clustering for each Z.
+    This is ~5x faster than running fit() for each Z value.
+    """
+    print(f"\nZ Parameter Study for {name} (optimized):")
+
+    # Use the optimized method
+    dpa = DPA(halo=True)
+    results = dpa.analyze_Z_sensitivity_fast(
+        X, Z_values=[1.0, 1.5, 2.0, 2.5, 3.0],
+        distances=distances, indices=indices,
+        y_true=y_true, verbose=True
+    )
+
+    # Print summary table
+    print(f"\n   Z    | Clusters | Halo pts | ARI   | NMI")
+    print("   -----|----------|----------|-------|------")
+    for i, Z in enumerate(results['Z_values']):
+        n_clusters = results['n_clusters'][i]
+        n_halo = results['n_halo'][i]
+        ari = results['ARI'][i] if 'ARI' in results else 0
+        nmi = results['NMI'][i] if 'NMI' in results else 0
+        print(f"   {Z:.1f}  | {n_clusters:^8} | {n_halo:^8} | {ari:.3f} | {nmi:.3f}")
 
     return results
 
@@ -275,11 +286,9 @@ if __name__ == "__main__":
         'time': total_time
     })
 
-    # Z study on 10k subset (full 60k is too slow for 5 runs)
-    print("\n(Z study on 10k subset to avoid memory issues)")
-    np.random.seed(42)
-    subset_idx = np.random.choice(len(X_mnist), 10000, replace=False)
-    z_parameter_study(X_mnist[subset_idx], y_mnist[subset_idx], "MNIST-subset")
+    # Z study on full 60k - now fast because we reuse precomputed Tangent Distances!
+    print("\n(Z study on full 60k MNIST - using precomputed Tangent Distances)")
+    z_parameter_study(X_mnist, y_mnist, "MNIST", distances=distances, indices=indices)
 
     # =========================================================================
     # Summary Table
