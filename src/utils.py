@@ -14,8 +14,55 @@ from scipy.ndimage import sobel
 from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics import pairwise_distances
 
+# Try to import FAISS for faster k-NN
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
 
-def compute_knn(X, k_max, metric='euclidean', algorithm='auto'):
+
+def compute_knn_faiss(X, k_max):
+    """
+    Compute k-NN using FAISS (10-50x faster than sklearn).
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_samples, n_features)
+        Data points (must be float32).
+    k_max : int
+        Maximum number of neighbors.
+
+    Returns
+    -------
+    distances : ndarray of shape (n_samples, k_max + 1)
+        Distances to k_max nearest neighbors (including self).
+    indices : ndarray of shape (n_samples, k_max + 1)
+        Indices of k_max nearest neighbors.
+    """
+    if not FAISS_AVAILABLE:
+        raise ImportError("FAISS not available. Install with: pip install faiss-cpu")
+
+    n_samples, n_features = X.shape
+    k_actual = min(k_max + 1, n_samples)
+
+    # FAISS requires float32 and C-contiguous arrays
+    X_faiss = np.ascontiguousarray(X.astype(np.float32))
+
+    # Create FAISS index (L2 = Euclidean squared)
+    index = faiss.IndexFlatL2(n_features)
+    index.add(X_faiss)
+
+    # Search for k nearest neighbors
+    distances_sq, indices = index.search(X_faiss, k_actual)
+
+    # Convert squared distances to Euclidean distances
+    distances = np.sqrt(np.maximum(distances_sq, 0))
+
+    return distances, indices
+
+
+def compute_knn(X, k_max, metric='euclidean', algorithm='auto', use_faiss='auto'):
     """
     Compute k-NN graph efficiently.
 
@@ -29,6 +76,11 @@ def compute_knn(X, k_max, metric='euclidean', algorithm='auto'):
         Distance metric.
     algorithm : str, default='auto'
         Algorithm for NearestNeighbors ('auto', 'ball_tree', 'kd_tree', 'brute').
+    use_faiss : str or bool, default='auto'
+        Whether to use FAISS for k-NN computation.
+        - 'auto': Use FAISS if available and metric is euclidean
+        - True: Force FAISS (raises error if not available)
+        - False: Use sklearn
 
     Returns
     -------
@@ -37,6 +89,16 @@ def compute_knn(X, k_max, metric='euclidean', algorithm='auto'):
     indices : ndarray of shape (n_samples, k_max + 1)
         Indices of k_max nearest neighbors.
     """
+    # Decide whether to use FAISS
+    if use_faiss == 'auto':
+        use_faiss = FAISS_AVAILABLE and metric == 'euclidean'
+
+    if use_faiss:
+        if not FAISS_AVAILABLE:
+            raise ImportError("FAISS requested but not available. Install with: pip install faiss-cpu")
+        return compute_knn_faiss(X, k_max)
+
+    # Fallback to sklearn
     n_samples = X.shape[0]
     k_actual = min(k_max + 1, n_samples)
 

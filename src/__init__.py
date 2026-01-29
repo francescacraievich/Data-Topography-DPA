@@ -28,7 +28,13 @@ from .clustering import (
     identify_halo_points,
     DensityPeaks
 )
-from .utils import TangentDistanceMetric, compute_tangent_distance_matrix, compute_knn_tangent_efficient
+from .utils import (
+    TangentDistanceMetric,
+    compute_tangent_distance_matrix,
+    compute_knn_tangent_efficient,
+    compute_knn_faiss,
+    FAISS_AVAILABLE
+)
 from .datasets import (
     load_optdigits,
     load_pendigits,
@@ -54,6 +60,8 @@ __all__ = [
     'identify_halo_points',
     'compute_tangent_distance_matrix',
     'compute_knn_tangent_efficient',
+    'compute_knn_faiss',
+    'FAISS_AVAILABLE',
     'load_optdigits',
     'load_pendigits',
     'load_mnist_subset',
