@@ -1,13 +1,14 @@
 """
 DPA clustering on all datasets from the paper (d'Errico et al., 2021).
 
-Applies DPA to the FULL datasets without reduction:
+Applies DPA to the FULL datasets:
 - Optdigits: 1797 samples, 64 features (8x8 pixels)
 - Pendigits: 10992 samples, 16 features
-- MNIST: 70000 samples, 784 features (28x28 pixels)
+- MNIST: 60000 samples, 784 features (28x28 pixels) with TANGENT DISTANCE
 
-Note: MNIST takes longer due to size. Use example_comparison.py for
-a faster comparison with subset.
+MNIST uses Tangent Distance (Simard et al., 1993) as in the paper:
+- Captures invariance to translations, rotations, scaling
+- Expected results: NMI ~ 0.84, ID ~ 8, ~10 clusters
 """
 
 import numpy as np
@@ -20,6 +21,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import DPA, load_optdigits, load_pendigits, load_mnist_subset
+from src.utils import compute_knn_tangent_efficient
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.decomposition import PCA
 
@@ -212,23 +214,72 @@ if __name__ == "__main__":
     z_parameter_study(X_pen, y_pen, "Pendigits")
 
     # =========================================================================
-    # Dataset 3: MNIST (large - full 70k samples)
+    # Dataset 3: MNIST with Tangent Distance (as in paper)
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Loading MNIST (full dataset - this may take a while)...")
-    print("Note: For faster testing, use load_mnist_subset(n_samples=5000)")
+    print("Loading MNIST (60k samples, as in paper)...")
+    print("Using TANGENT DISTANCE (Simard et al., 1993) - this is key for good results!")
 
-    # Load full MNIST
-    data = load_mnist_subset(n_samples=None)  # None = full dataset
+    # Load 60k MNIST (as in paper)
+    data = load_mnist_subset(n_samples=60000)
     X_mnist, y_mnist = data['data'], data['target']
 
-    # MNIST is large, use slightly lower Z due to high dimensionality
-    result = run_dpa_on_dataset("MNIST", X_mnist, y_mnist, Z=1.6)
-    all_results.append(result)
+    print(f"\nDataset: MNIST")
+    print(f"Samples: {X_mnist.shape[0]}, Features: {X_mnist.shape[1]}")
+    print(f"True classes: {len(np.unique(y_mnist))}")
 
-    # Z study on full dataset
-    print("\n(Z study on full MNIST - this will take a while)")
-    z_parameter_study(X_mnist, y_mnist, "MNIST")
+    # Compute k-NN with Tangent Distance (as in paper Section 3.2)
+    print("\nComputing k-NN with Tangent Distance (hybrid approach)...")
+    print("This captures invariance to translations, rotations, scaling...")
+    start_knn = time.time()
+    distances, indices = compute_knn_tangent_efficient(
+        X_mnist, k_max=100, image_shape=(28, 28),
+        mode='one_sided', k_candidates=200, verbose=True, n_jobs=-1
+    )
+    knn_time = time.time() - start_knn
+    print(f"Tangent Distance k-NN completed in {knn_time:.1f}s")
+
+    # Run DPA with precomputed Tangent Distance (Z=1.6 as in paper)
+    print(f"\nFitting DPA (Z=1.6, as in paper)...")
+    start_dpa = time.time()
+    dpa = DPA(Z=1.6, halo=True)
+    labels = dpa.fit_predict(X_mnist, distances=distances, indices=indices)
+    dpa_time = time.time() - start_dpa
+    total_time = knn_time + dpa_time
+
+    # Results
+    summary = dpa.summary()
+    print(f"\nResults (Paper reference: NMI=0.84, ID=8, 10 clusters):")
+    print(f"  Intrinsic dimension (TWO-NN): {summary['intrinsic_dimension']:.2f} (paper: 8)")
+    print(f"  Clusters found: {summary['n_clusters']} (paper: 10)")
+    print(f"  Halo points: {summary['n_halo_points']} ({100*summary['n_halo_points']/len(X_mnist):.1f}%)")
+
+    # Metrics
+    ari = adjusted_rand_score(y_mnist, dpa.labels_full_)
+    nmi = normalized_mutual_info_score(y_mnist, dpa.labels_full_)
+    print(f"\nClustering Quality:")
+    print(f"  ARI: {ari:.3f}")
+    print(f"  NMI: {nmi:.3f} (paper: 0.84)")
+    print(f"  Time: {total_time:.1f}s (k-NN: {knn_time:.1f}s, DPA: {dpa_time:.1f}s)")
+
+    all_results.append({
+        'name': 'MNIST (TD)',
+        'n_samples': X_mnist.shape[0],
+        'n_features': X_mnist.shape[1],
+        'n_true_classes': len(np.unique(y_mnist)),
+        'intrinsic_dim': summary['intrinsic_dimension'],
+        'n_clusters': summary['n_clusters'],
+        'n_halo': summary['n_halo_points'],
+        'ari': ari,
+        'nmi': nmi,
+        'time': total_time
+    })
+
+    # Z study on 10k subset (full 60k is too slow for 5 runs)
+    print("\n(Z study on 10k subset to avoid memory issues)")
+    np.random.seed(42)
+    subset_idx = np.random.choice(len(X_mnist), 10000, replace=False)
+    z_parameter_study(X_mnist[subset_idx], y_mnist[subset_idx], "MNIST-subset")
 
     # =========================================================================
     # Summary Table
@@ -257,5 +308,5 @@ if __name__ == "__main__":
     print("  Lower than embedding dimension indicates data lies on manifold")
     print("- Halo points: Low-confidence assignments (density < saddle)")
     print("- ARI/NMI: Higher = better match to ground truth")
-    print("\nNote: MNIST benefits from Tangent Distance (not used here)")
-    print("      See example_comparison.py for Tangent Distance results")
+    print("\nNote: MNIST uses Tangent Distance (as in paper Section 3.2)")
+    print("      Expected NMI ~ 0.84 with proper parameters")
