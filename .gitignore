@@ -41,6 +41,13 @@ env/
 *.pkl
 data/
 
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
 # OS
 .DS_Store
 Thumbs.db
