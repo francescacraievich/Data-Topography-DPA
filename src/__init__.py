@@ -31,6 +31,8 @@ from .clustering import (
 from .utils import (
     TangentDistanceMetric,
     compute_tangent_distance_matrix,
+    compute_full_tangent_distance_matrix,
+    knn_from_distance_matrix,
     compute_knn_tangent_efficient,
     compute_knn_faiss,
     FAISS_AVAILABLE
@@ -59,6 +61,8 @@ __all__ = [
     'merge_insignificant_peaks',
     'identify_halo_points',
     'compute_tangent_distance_matrix',
+    'compute_full_tangent_distance_matrix',
+    'knn_from_distance_matrix',
     'compute_knn_tangent_efficient',
     'compute_knn_faiss',
     'FAISS_AVAILABLE',

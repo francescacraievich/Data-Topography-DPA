@@ -143,7 +143,12 @@ class TwoNN:
         y = -np.log(1 - cdf)
 
         # Slope = d = sum(x*y) / sum(x^2)
-        self.dimension_ = linear_regression_through_origin(x, y)
+        d_raw = linear_regression_through_origin(x, y)
+
+        # Round to integer as in official DPA implementation
+        # The official twoNN returns int(round(id))
+        self.dimension_ = int(round(d_raw))
+        self.dimension_raw_ = d_raw  # Keep raw value for diagnostics
 
         return self
 

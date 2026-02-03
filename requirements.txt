@@ -10,6 +10,10 @@ joblib>=1.0.0
 # Performance (optional but recommended)
 faiss-cpu>=1.7.0
 
+# GPU acceleration (optional - for MNIST Tangent Distance)
+# Install torch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+
 # Testing
 pytest>=7.0.0
 pytest-cov>=4.0.0
