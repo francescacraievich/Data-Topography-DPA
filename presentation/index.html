@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DPA - Density Peak Advanced Clustering</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/theme/night.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <style>
+        .reveal h1, .reveal h2 { color: #58a6ff; }
+        .reveal h3 { color: #ff6b6b; }
+        .reveal .slides section { text-align: left; }
+        .reveal .slides section.center { text-align: center; }
+        .reveal table { font-size: 0.65em; margin: 15px auto; }
+        .reveal table th { background: #58a6ff; color: white; }
+        .reveal table td, .reveal table th { padding: 8px 12px; border: 1px solid #444; }
+        .reveal .highlight { color: #ff6b6b; font-weight: bold; }
+        .reveal .formula { background: rgba(88, 166, 255, 0.1); padding: 15px; border-radius: 10px; margin: 15px 0; }
+        .reveal ul { margin-left: 20px; }
+        .reveal li { margin: 8px 0; font-size: 0.9em; }
+        .reveal .two-cols { display: flex; gap: 30px; }
+        .reveal .two-cols > div { flex: 1; }
+        .reveal .small { font-size: 0.7em; }
+        .reveal .pros { color: #4ade80; }
+        .reveal .cons { color: #f87171; }
+        .reveal code { background: #333; padding: 2px 8px; border-radius: 4px; }
+        .title-slide h1 { font-size: 2.5em !important; }
+        .title-slide h2 { color: #aaa !important; font-size: 1.2em !important; }
+        .reveal img { max-width: 100%; height: auto; border-radius: 8px; }
+        .reveal .img-row { display: flex; gap: 15px; justify-content: center; align-items: center; }
+        .reveal .img-row img { max-height: 350px; }
+        .reveal p { font-size: 0.85em; }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+
+            <!-- TITLE SLIDE -->
+            <section class="center title-slide">
+                <h1>DPA</h1>
+                <h2>Density Peak Advanced Clustering</h2>
+                <p style="margin-top: 40px; color: #888;">
+                    d'Errico, Facco, Laio & Rodriguez (2021)<br>
+                    <em>Information Sciences</em>
+                </p>
+                <p style="margin-top: 50px; color: #58a6ff;">
+                    Unsupervised Learning Course
+                </p>
+                <p style="margin-top: 10px; color: #777; font-size: 0.7em;">
+                    Francesca Craievich
+                </p>
+            </section>
+
+            <!-- OUTLINE -->
+            <section>
+                <h2>Outline</h2>
+                <ol>
+                    <li>Motivation & Problem</li>
+                    <li><strong>Understanding the Method</strong>
+                        <ul class="small">
+                            <li>TWO-NN (Intrinsic Dimension)</li>
+                            <li>PAk (Adaptive Density Estimation)</li>
+                            <li>Heuristics 1-3</li>
+                        </ul>
+                    </li>
+                    <li><strong>Hyperparameters & Limitations</strong></li>
+                    <li><strong>Comparison with Other Methods</strong></li>
+                    <li>Results & Demo</li>
+                </ol>
+            </section>
+
+            <!-- MOTIVATION -->
+            <section>
+                <h2>The Problem</h2>
+                <h3>Standard Density Peaks (DP) Limitations</h3>
+                <div class="two-cols">
+                    <div>
+                        <p><strong>DP (Rodriguez & Laio, 2014):</strong></p>
+                        <ul>
+                            <li class="cons">Manual center selection</li>
+                            <li class="cons">Fixed k-NN density</li>
+                            <li class="cons">No error quantification</li>
+                            <li class="cons">Manual cluster merging</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <p><strong>DPA (2021) solves all:</strong></p>
+                        <ul>
+                            <li class="pros">Automatic center detection</li>
+                            <li class="pros">Adaptive PAk density</li>
+                            <li class="pros">Fisher Information bounds</li>
+                            <li class="pros">Statistical merging (Z-score)</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- DPA OVERVIEW -->
+            <section>
+                <h2>DPA Algorithm Overview</h2>
+                <ol>
+                    <li><strong>Estimate intrinsic dimension</strong> d using TWO-NN</li>
+                    <li><strong>Compute adaptive density</strong> ρ using PAk</li>
+                    <li><strong>Find cluster centers</strong> (Heuristic 1)</li>
+                    <li><strong>Find saddle points</strong> (Heuristic 2)</li>
+                    <li><strong>Merge insignificant peaks</strong> (Heuristic 3)</li>
+                    <li><strong>Assign points</strong> following density gradient</li>
+                </ol>
+                <p style="margin-top: 30px; color: #58a6ff;">
+                    <strong>Key advantage:</strong> Only ONE parameter (Z)!
+                </p>
+            </section>
+
+            <!-- TWO-NN -->
+            <section>
+                <h2>Understanding the Method</h2>
+                <h3>1. TWO-NN: Intrinsic Dimension</h3>
+                <p>Estimates the <span class="highlight">intrinsic dimension</span> d of the data manifold.</p>
+                <div class="formula">
+                    <p><strong>Idea:</strong> For uniform density, the ratio μ = r₂/r₁ follows:</p>
+                    <p style="text-align: center; font-size: 1.2em;">
+                        P(μ) = d · μ<sup>d-1</sup>
+                    </p>
+                    <p>where r₁, r₂ are distances to 1st and 2nd nearest neighbors.</p>
+                </div>
+                <p><strong>Why it matters:</strong></p>
+                <ul>
+                    <li>Optdigits: 64 features → d ≈ 8-9</li>
+                    <li>MNIST: 784 features → d ≈ 12-14</li>
+                </ul>
+            </section>
+
+            <!-- PAk -->
+            <section>
+                <h2>Understanding the Method</h2>
+                <h3>2. PAk: Adaptive Density Estimation</h3>
+                <p>Finds <span class="highlight">optimal k</span> for each point using Likelihood Ratio Test.</p>
+                <div class="formula">
+                    <p><strong>Test statistic:</strong></p>
+                    <p style="text-align: center;">
+                        D<sub>k</sub> = 2[L<sub>k+1</sub>(ρ̂<sub>k+1</sub>) - L<sub>k+1</sub>(ρ̂<sub>k</sub>)]
+                    </p>
+                    <p>Stop when D<sub>k</sub> > threshold (density no longer constant)</p>
+                </div>
+                <p><strong>Error from Fisher Information:</strong></p>
+                <p style="text-align: center; background: rgba(255,107,107,0.1); padding: 15px; border-radius: 10px;">
+                    ε = √(4(k̂+2) / ((k̂-1)·k̂))
+                </p>
+            </section>
+
+            <!-- HEURISTICS -->
+            <section>
+                <h2>Understanding the Method</h2>
+                <h3>3. The Three Heuristics</h3>
+                <table>
+                    <tr>
+                        <th>Heuristic</th>
+                        <th>Purpose</th>
+                        <th>Criterion</th>
+                    </tr>
+                    <tr>
+                        <td><strong>H1</strong></td>
+                        <td>Find cluster centers</td>
+                        <td>δᵢ > r<sub>k̂ᵢ</sub> AND not in higher-g neighborhood</td>
+                    </tr>
+                    <tr>
+                        <td><strong>H2</strong></td>
+                        <td>Find saddle points</td>
+                        <td>Highest g among border points</td>
+                    </tr>
+                    <tr>
+                        <td><strong>H3</strong></td>
+                        <td>Merge peaks</td>
+                        <td>Z-test on peak height vs saddle</td>
+                    </tr>
+                </table>
+                <p style="margin-top: 20px;">
+                    <strong>g = log(ρ) - ε</strong> (error-adjusted density)
+                </p>
+            </section>
+
+            <!-- Z PARAMETER -->
+            <section>
+                <h2>Hyperparameters</h2>
+                <h3>The Z Parameter</h3>
+                <div class="formula">
+                    <p><strong>Merge criterion (Heuristic 3):</strong></p>
+                    <p style="text-align: center; font-size: 1.1em;">
+                        log(ρ<sub>peak</sub>) - log(ρ<sub>saddle</sub>) < Z · √(ε²<sub>peak</sub> + ε²<sub>saddle</sub>)
+                    </p>
+                </div>
+                <table>
+                    <tr>
+                        <th>Z</th>
+                        <th>Confidence</th>
+                        <th>Effect</th>
+                    </tr>
+                    <tr>
+                        <td>1.0</td>
+                        <td>68%</td>
+                        <td>More clusters (liberal)</td>
+                    </tr>
+                    <tr>
+                        <td>2.0</td>
+                        <td>95%</td>
+                        <td>Balanced (default)</td>
+                    </tr>
+                    <tr>
+                        <td>3.0</td>
+                        <td>99.7%</td>
+                        <td>Fewer clusters (conservative)</td>
+                    </tr>
+                </table>
+            </section>
+
+            <!-- Z SENSITIVITY -->
+            <section>
+                <h2>Hyperparameters</h2>
+                <h3>Z Sensitivity on Real Data</h3>
+                <p><strong>Optdigits (64D, 10 classes):</strong></p>
+                <table>
+                    <tr>
+                        <th>Z</th>
+                        <td>0.5</td>
+                        <td>1.0</td>
+                        <td>1.5</td>
+                        <td>2.0</td>
+                        <td>2.5</td>
+                        <td>3.0</td>
+                    </tr>
+                    <tr>
+                        <th>Clusters</th>
+                        <td>21</td>
+                        <td>18</td>
+                        <td>17</td>
+                        <td>17</td>
+                        <td>13</td>
+                        <td>13</td>
+                    </tr>
+                </table>
+                <p style="margin-top: 20px;">
+                    <strong>Recommendation:</strong> For high-D data (d > 10), use <span class="highlight">Z ≈ 1.5-1.8</span><br>
+                    (larger ε → need lower Z to compensate)
+                </p>
+            </section>
+
+            <!-- LIMITATIONS -->
+            <section>
+                <h2>Limitations</h2>
+                <div class="two-cols">
+                    <div>
+                        <h3 class="cons">Weaknesses</h3>
+                        <ul>
+                            <li><strong>High dimensions (d > 15):</strong><br>
+                                PAk estimation degrades</li>
+                            <li><strong>Computation:</strong><br>
+                                O(N × k<sub>max</sub> × log N)</li>
+                            <li><strong>Image data:</strong><br>
+                                Needs Tangent Distance</li>
+                            <li><strong>Uniform density:</strong><br>
+                                No natural peaks</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <h3 class="pros">Mitigations</h3>
+                        <ul>
+                            <li>Use lower Z for high-D</li>
+                            <li>FAISS for fast k-NN</li>
+                            <li>Tangent Distance built-in</li>
+                            <li>Check decision graph</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- COMPARISON TABLE -->
+            <section class="center">
+                <h2>Method Comparison</h2>
+                <table style="font-size: 0.55em;">
+                    <tr>
+                        <th>Criterion</th>
+                        <th>DPA</th>
+                        <th>DP</th>
+                        <th>DBSCAN</th>
+                        <th>Spectral</th>
+                        <th>GMM</th>
+                    </tr>
+                    <tr>
+                        <td><strong>Auto k</strong></td>
+                        <td class="pros">Yes (Z-test)</td>
+                        <td class="cons">No (manual)</td>
+                        <td>Unreliable</td>
+                        <td class="cons">No</td>
+                        <td>BIC</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Parameters</strong></td>
+                        <td class="pros">Z only</td>
+                        <td>k, threshold</td>
+                        <td>eps, min_pts</td>
+                        <td>k</td>
+                        <td>k, cov</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Non-convex</strong></td>
+                        <td class="pros">Yes</td>
+                        <td class="pros">Yes</td>
+                        <td class="pros">Yes</td>
+                        <td class="pros">Yes</td>
+                        <td class="cons">No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Error bounds</strong></td>
+                        <td class="pros">Fisher Info</td>
+                        <td class="cons">None</td>
+                        <td class="cons">None</td>
+                        <td class="cons">None</td>
+                        <td class="cons">None</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Topography</strong></td>
+                        <td class="pros">Yes</td>
+                        <td class="cons">No</td>
+                        <td class="cons">No</td>
+                        <td class="cons">No</td>
+                        <td class="cons">No</td>
+                    </tr>
+                </table>
+            </section>
+
+            <!-- RESULTS OPTDIGITS -->
+            <section class="center">
+                <h2>Results: Optdigits</h2>
+                <img src="../plots/comparison_optdigits.png" alt="Comparison Optdigits" style="max-height: 580px; max-width: 95%;">
+            </section>
+
+            <!-- RESULTS PENDIGITS -->
+            <section class="center">
+                <h2>Results: Pendigits</h2>
+                <img src="../plots/comparison_pendigits.png" alt="Comparison Pendigits" style="max-height: 580px; max-width: 95%;">
+            </section>
+
+            <!-- RESULTS MNIST -->
+            <section class="center">
+                <h2>Results: MNIST</h2>
+                <img src="../plots/comparison_mnist.png" alt="Comparison MNIST" style="max-height: 580px; max-width: 95%;">
+            </section>
+
+            <!-- DPA TOPOGRAPHY -->
+            <section class="center">
+                <h2>DPA Topography</h2>
+                <div class="img-row">
+                    <img src="../plots/optdigits_decision_graph.png" alt="Decision Graph" style="max-height: 500px;">
+                    <img src="../plots/optdigits_dendrogram.png" alt="Dendrogram" style="max-height: 500px;">
+                </div>
+            </section>
+
+            <!-- CONCLUSIONS -->
+            <section class="center">
+                <h2>Conclusions</h2>
+                <ul style="text-align: left; max-width: 700px; margin: 0 auto;">
+                    <li><strong>DPA automates</strong> what DP required manually</li>
+                    <li><strong>Single parameter Z</strong> with clear statistical meaning</li>
+                    <li><strong>Error quantification</strong> via Fisher Information</li>
+                    <li><strong>Topographic analysis</strong> for cluster interpretation</li>
+                    <li>Works well on <strong>real high-D data</strong> (UCI datasets)</li>
+                </ul>
+            </section>
+
+            <!-- THANK YOU -->
+            <section class="center">
+                <h1>Thank You!</h1>
+                <p style="margin-top: 40px;">
+                    <strong>Questions?</strong>
+                </p>
+                <p style="margin-top: 60px; color: #888; font-size: 0.8em;">
+                    Code: github.com/francescacraievich/Data-Topography-DPA
+                </p>
+            </section>
+
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/math/math.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            slideNumber: true,
+            transition: 'slide',
+            width: 1280,
+            height: 720,
+            margin: 0.1,
+            minScale: 0.2,
+            maxScale: 2.0,
+            center: true,
+            plugins: [ RevealMath.KaTeX ]
+        });
+    </script>
+</body>
+</html>

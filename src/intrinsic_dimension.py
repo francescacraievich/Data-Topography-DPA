@@ -561,7 +561,7 @@ class BlockAnalysis:
                         f"N = {summary['plateau_block_sizes'][1]}")
             lines.append("  → Dimension estimate is reliable")
         else:
-            lines.append("⚠ NO CLEAR PLATEAU")
+            lines.append("WARNING: NO CLEAR PLATEAU")
             lines.append("  → Dimension estimate may be unreliable")
 
         lines.append("")
