@@ -255,10 +255,22 @@ class DPA(BaseEstimator, ClusterMixin):
         # Step 5: Initial cluster assignment
         labels = assign_to_clusters(self.g_, self._nearest_higher, centers, n_samples)
 
-        # Step 6: Find saddle points (Algorithm 2)
+        # Handle any unassigned points (nearest_higher == -1)
+        # Assign them to the cluster of their nearest assigned neighbor
+        unassigned = np.where(labels < 0)[0]
+        if len(unassigned) > 0:
+            for i in unassigned:
+                for j_pos in range(1, self._indices.shape[1]):
+                    j = self._indices[i, j_pos]
+                    if labels[j] >= 0:
+                        labels[i] = labels[j]
+                        break
+
+        # Step 6: Find saddle points (Heuristic 2)
         saddles, border_points = find_saddle_points(
             labels, self.g_, self.log_density_, self.epsilon_,
-            self._distances, self._indices, self.k_hat_
+            self._distances, self._indices, self.k_hat_,
+            centers=centers
         )
 
         # Step 7: Merge insignificant peaks (Algorithm 3)
@@ -771,10 +783,21 @@ class DPA(BaseEstimator, ClusterMixin):
         # Assign all points to initial clusters (Heuristic 2) - doesn't depend on Z
         initial_labels = assign_to_clusters(g, nearest_higher, centers, n_samples)
 
+        # Handle any unassigned points (nearest_higher == -1)
+        unassigned = np.where(initial_labels < 0)[0]
+        if len(unassigned) > 0:
+            for i in unassigned:
+                for j_pos in range(1, self._distances.shape[1]):
+                    j = self._indices[i, j_pos]
+                    if initial_labels[j] >= 0:
+                        initial_labels[i] = initial_labels[j]
+                        break
+
         # Find all saddle points - doesn't depend on Z
         all_saddles, _ = find_saddle_points(
             initial_labels, g, log_density, epsilon,
-            self._distances, self._indices, k_hat
+            self._distances, self._indices, k_hat,
+            centers=centers
         )
 
         if verbose:

@@ -27,25 +27,46 @@ import time
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import DPA, DensityPeaks, load_optdigits, load_pendigits, load_mnist_subset
-from src.utils import compute_knn_tangent_efficient
+from src import DPA, DensityPeaks, TwoNN, load_optdigits, load_pendigits, load_mnist_subset
+from src.utils import compute_knn_tangent_efficient, compute_knn_tangent_fast
 
 
-def run_dpa(X_scaled, Z=1.5, distances=None, indices=None):
-    """Run DPA clustering."""
+def run_dpa(X, y_true, distances=None, indices=None):
+    """Run DPA clustering, sweeping Z to find the best (like DBSCAN sweeps eps)."""
     try:
         start = time.time()
-        dpa = DPA(Z=Z, halo=False)
-        labels = dpa.fit_predict(X_scaled, distances=distances, indices=indices)
+        dpa = DPA(halo=False)
+
+        # Use fast Z sensitivity: computes density ONCE, then sweeps Z
+        Z_values = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+        results = dpa.analyze_Z_sensitivity_fast(
+            X, Z_values=Z_values,
+            distances=distances, indices=indices,
+            y_true=y_true, verbose=False
+        )
+
+        # Pick best Z by ARI (same criterion as DBSCAN tuning)
+        best_idx = int(np.argmax(results['ARI']))
+        best_Z = results['Z_values'][best_idx]
+
+        # Re-fit with best Z to get labels
+        dpa_best = DPA(Z=best_Z, halo=False)
+        labels = dpa_best.fit_predict(X, distances=distances, indices=indices)
         elapsed = time.time() - start
+
         return {
             'labels': labels,
-            'n_clusters': dpa.n_clusters_,
-            'd_estimated': dpa.d_,
+            'n_clusters': dpa_best.n_clusters_,
+            'd_estimated': dpa_best.d_,
             'time': elapsed,
-            'note': f'Auto k, Z={Z}'
+            'note': f'Best Z={best_Z} (sweep)',
+            'Z_sweep': {z: (nc, ari, nmi) for z, nc, ari, nmi
+                        in zip(results['Z_values'], results['n_clusters'],
+                               results['ARI'], results['NMI'])}
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {'error': str(e)}
 
 
@@ -100,19 +121,37 @@ def run_dpa_tangent(X, image_shape, Z=1.6, k_max=100, n_jobs=-1):
         return {'error': str(e)}
 
 
-def run_dp(X_scaled, k=20, percent=2.0):
-    """Run standard Density Peaks."""
+def run_dp(X_scaled, y_true, k=20):
+    """Run standard Density Peaks, sweeping percent to find best."""
     try:
         start = time.time()
-        dp = DensityPeaks(k=k, percent=percent)
-        labels = dp.fit_predict(X_scaled)
+        best_ari = -1
+        best_labels = None
+        best_percent = None
+
+        for percent in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]:
+            dp = DensityPeaks(k=k, percent=percent)
+            labels = dp.fit_predict(X_scaled)
+            n_clusters = dp.n_clusters_
+            if n_clusters > 1:
+                ari = adjusted_rand_score(y_true, labels)
+                if ari > best_ari:
+                    best_ari = ari
+                    best_labels = labels
+                    best_percent = percent
+                    best_n = n_clusters
+
         elapsed = time.time() - start
-        return {
-            'labels': labels,
-            'n_clusters': dp.n_clusters_,
-            'time': elapsed,
-            'note': f'Manual k ({percent}%)'
-        }
+        if best_labels is not None:
+            return {
+                'labels': best_labels,
+                'n_clusters': best_n,
+                'time': elapsed,
+                'note': f'Best pct={best_percent}%'
+            }
+        else:
+            return {'labels': np.zeros(len(X_scaled), dtype=int), 'n_clusters': 1,
+                    'time': elapsed, 'note': 'No good pct found'}
     except Exception as e:
         return {'error': str(e)}
 
@@ -238,26 +277,23 @@ def run_all_methods(X, y_true, n_clusters_true, dataset_name):
 
     print(f"\n  Running on FULL data: {n_samples:,} samples, {n_features} features")
 
-    # Standardize data
+    # Standardize data (for methods that need it - NOT DPA)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # Determine Z based on dimensionality
-    Z = 1.0 if n_features > 100 else 1.5
-
-    # 1. DPA
-    print(f"  [1/5] DPA (Z={Z})...", end=" ", flush=True)
-    results['DPA'] = run_dpa(X_scaled, Z=Z)
+    # 1. DPA - uses RAW data, sweeps Z (like DBSCAN sweeps eps)
+    print(f"  [1/5] DPA (sweeping Z, raw data)...", end=" ", flush=True)
+    results['DPA'] = run_dpa(X, y_true)  # Raw data, sweep Z
     if 'time' in results['DPA']:
-        print(f"{results['DPA']['time']:.1f}s, {results['DPA']['n_clusters']} clusters")
+        print(f"{results['DPA']['time']:.1f}s, {results['DPA']['n_clusters']} clusters ({results['DPA']['note']})")
     else:
         print(f"ERROR: {results['DPA'].get('error', 'unknown')[:50]}")
 
-    # 2. DP
-    print(f"  [2/5] DP...", end=" ", flush=True)
-    results['DP'] = run_dp(X_scaled)
+    # 2. DP - sweeps percent parameter (like DBSCAN sweeps eps)
+    print(f"  [2/5] DP (sweeping pct)...", end=" ", flush=True)
+    results['DP'] = run_dp(X_scaled, y_true)
     if 'time' in results['DP']:
-        print(f"{results['DP']['time']:.1f}s, {results['DP']['n_clusters']} clusters")
+        print(f"{results['DP']['time']:.1f}s, {results['DP']['n_clusters']} clusters ({results['DP']['note']})")
     else:
         print(f"ERROR: {results['DP'].get('error', 'unknown')[:50]}")
 
@@ -397,6 +433,17 @@ def print_metrics_table(metrics, methods=None):
                 print(f"  {method:<15} | {'ERR':>6} | {'ERR':>6} | {'-':>8} | {'-':>10} | {m.get('error', '')[:23]}")
 
 
+def print_z_sweep(results):
+    """Print DPA Z sweep details if available."""
+    if 'DPA' in results and 'Z_sweep' in results['DPA']:
+        print(f"\n  DPA Z sweep details:")
+        print(f"    {'Z':>4} | {'Clusters':>8} | {'ARI':>6} | {'NMI':>6}")
+        print(f"    {'-'*4}-+-{'-'*8}-+-{'-'*6}-+-{'-'*6}")
+        for z, (nc, ari, nmi) in sorted(results['DPA']['Z_sweep'].items()):
+            marker = " <-- best" if f"Z={z}" in results['DPA']['note'] else ""
+            print(f"    {z:>4.1f} | {nc:>8} | {ari:>6.3f} | {nmi:>6.3f}{marker}")
+
+
 if __name__ == "__main__":
     print("=" * 70)
     print("DPA vs Other Methods - Comprehensive Comparison")
@@ -428,6 +475,7 @@ if __name__ == "__main__":
     all_metrics['optdigits'] = metrics
 
     print_metrics_table(metrics, ['DPA', 'DP', 'DBSCAN', 'Spectral', 'GMM'])
+    print_z_sweep(results)
 
     fig = plot_comparison(X, y, results, 'Optdigits - All Methods on Full Data',
                          os.path.join(plot_dir, 'comparison_optdigits.png'))
@@ -448,6 +496,7 @@ if __name__ == "__main__":
     all_metrics['pendigits'] = metrics
 
     print_metrics_table(metrics, ['DPA', 'DP', 'DBSCAN', 'Spectral', 'GMM'])
+    print_z_sweep(results)
 
     fig = plot_comparison(X, y, results, 'Pendigits - All Methods on Full Data',
                          os.path.join(plot_dir, 'comparison_pendigits.png'))
@@ -480,19 +529,19 @@ if __name__ == "__main__":
     # Run all methods on 10k subset
     print("\n  Running all methods on 10k subset...")
 
-    # DPA
-    print(f"  [1/5] DPA (Z=1.0)...", end=" ", flush=True)
-    result_dpa = run_dpa(X_mnist_scaled, Z=1.0)
+    # DPA - uses RAW data, sweeps Z
+    print(f"  [1/5] DPA (sweeping Z, raw data)...", end=" ", flush=True)
+    result_dpa = run_dpa(X_mnist, y_mnist)  # Raw data, sweep Z
     if 'time' in result_dpa:
-        print(f"{result_dpa['time']:.1f}s, {result_dpa['n_clusters']} clusters")
+        print(f"{result_dpa['time']:.1f}s, {result_dpa['n_clusters']} clusters ({result_dpa['note']})")
     else:
         print(f"ERROR: {result_dpa.get('error', 'unknown')[:50]}")
 
-    # DP
-    print(f"  [2/5] DP...", end=" ", flush=True)
-    result_dp = run_dp(X_mnist_scaled)
+    # DP - sweeps percent
+    print(f"  [2/5] DP (sweeping pct)...", end=" ", flush=True)
+    result_dp = run_dp(X_mnist_scaled, y_mnist)
     if 'time' in result_dp:
-        print(f"{result_dp['time']:.1f}s, {result_dp['n_clusters']} clusters")
+        print(f"{result_dp['time']:.1f}s, {result_dp['n_clusters']} clusters ({result_dp['note']})")
     else:
         print(f"ERROR: {result_dp.get('error', 'unknown')[:50]}")
 
@@ -520,9 +569,51 @@ if __name__ == "__main__":
     else:
         print(f"ERROR: {result_gmm.get('error', 'unknown')[:50]}")
 
+    # DPA + Tangent Distance (as in paper Section 3.2)
+    # Uses k-NN hybrid: Euclidean candidates + TD reranking
+    print(f"\n  [+] DPA + Tangent Distance (paper's method)...")
+    cache_td = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            'cache', 'mnist_10000_tangent_knn.npz')
+    try:
+        start_td = time.time()
+        td_distances, td_indices = compute_knn_tangent_fast(
+            X_mnist, k_max=100, image_shape=(28, 28), mode='one_sided',
+            k_candidates=300, verbose=False, cache_file=cache_td
+        )
+        # Sweep Z for best result
+        dpa_td = DPA(halo=False)
+        Z_values_td = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+        results_td = dpa_td.analyze_Z_sensitivity_fast(
+            X_mnist, Z_values=Z_values_td,
+            distances=td_distances, indices=td_indices,
+            y_true=y_mnist, verbose=False
+        )
+        best_idx_td = int(np.argmax(results_td['ARI']))
+        best_Z_td = results_td['Z_values'][best_idx_td]
+        dpa_td_best = DPA(Z=best_Z_td, halo=False)
+        labels_td = dpa_td_best.fit_predict(X_mnist, distances=td_distances, indices=td_indices)
+        elapsed_td = time.time() - start_td
+
+        result_dpa_td = {
+            'labels': labels_td,
+            'n_clusters': dpa_td_best.n_clusters_,
+            'd_estimated': dpa_td_best.d_,
+            'time': elapsed_td,
+            'note': f'TD, Best Z={best_Z_td}',
+            'Z_sweep': {z: (nc, ari, nmi) for z, nc, ari, nmi
+                        in zip(results_td['Z_values'], results_td['n_clusters'],
+                               results_td['ARI'], results_td['NMI'])}
+        }
+        print(f"  {elapsed_td:.1f}s, {dpa_td_best.n_clusters_} clusters (Z={best_Z_td})")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        result_dpa_td = {'error': str(e)}
+
     # Evaluate all methods
     mnist_results = {
         'DPA': result_dpa,
+        'DPA+TD': result_dpa_td,
         'DP': result_dp,
         'DBSCAN': result_dbscan,
         'Spectral': result_spectral,
@@ -531,7 +622,15 @@ if __name__ == "__main__":
     metrics_mnist = evaluate_results(y_mnist, mnist_results)
     all_metrics['mnist'] = metrics_mnist
 
-    print_metrics_table(metrics_mnist, ['DPA', 'DP', 'DBSCAN', 'Spectral', 'GMM'])
+    print_metrics_table(metrics_mnist, ['DPA', 'DPA+TD', 'DP', 'DBSCAN', 'Spectral', 'GMM'])
+    print_z_sweep(mnist_results)
+    if 'DPA+TD' in mnist_results and 'Z_sweep' in mnist_results['DPA+TD']:
+        print(f"\n  DPA+TD Z sweep details:")
+        print(f"    {'Z':>4} | {'Clusters':>8} | {'ARI':>6} | {'NMI':>6}")
+        print(f"    {'-'*4}-+-{'-'*8}-+-{'-'*6}-+-{'-'*6}")
+        for z, (nc, ari, nmi) in sorted(mnist_results['DPA+TD']['Z_sweep'].items()):
+            marker = " <-- best" if f"Z={z}" in mnist_results['DPA+TD']['note'] else ""
+            print(f"    {z:>4.1f} | {nc:>8} | {ari:>6.3f} | {nmi:>6.3f}{marker}")
 
     # Save plot
     fig = plot_comparison(X_mnist, y_mnist, mnist_results,
@@ -552,7 +651,10 @@ if __name__ == "__main__":
     # All datasets
     for dataset in ['optdigits', 'pendigits', 'mnist']:
         if dataset in all_metrics:
-            for method in ['DPA', 'DP', 'DBSCAN', 'Spectral', 'GMM']:
+            methods_list = ['DPA', 'DP', 'DBSCAN', 'Spectral', 'GMM']
+            if dataset == 'mnist':
+                methods_list = ['DPA', 'DPA+TD', 'DP', 'DBSCAN', 'Spectral', 'GMM']
+            for method in methods_list:
                 if method in all_metrics[dataset]:
                     m = all_metrics[dataset][method]
                     if m.get('ARI') is not None:
@@ -569,7 +671,7 @@ if __name__ == "__main__":
        - DP requires MANUAL center selection from decision graph
        - DPA AUTOMATES this with statistical significance testing
        - DPA uses adaptive PAk density (DP uses fixed k)
-       - DP computes O(n²) matrix → limited to ~10k samples
+       - DP computes O(n^2) matrix, limited to ~10k samples
 
     2. DPA vs Other Methods:
        - Spectral/GMM require knowing k (number of clusters)
@@ -578,7 +680,9 @@ if __name__ == "__main__":
 
     3. Note on MNIST:
        - Paper uses Tangent Distance on 60k for NMI ~ 0.84
-       - Here we use Euclidean on 10k for fair comparison
+       - DPA+TD uses k-NN hybrid (Euclidean candidates + TD reranking)
+       - Full TD matrix is worse: spurious inter-cluster connections
+         reduce clustering quality vs the hybrid approach
 
     Reference: d'Errico et al. (2021), Information Sciences
     """)

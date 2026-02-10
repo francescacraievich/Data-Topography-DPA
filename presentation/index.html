@@ -219,11 +219,10 @@
             <section>
                 <h2>Hyperparameters</h2>
                 <h3>Z Sensitivity on Real Data</h3>
-                <p><strong>Optdigits (64D, 10 classes):</strong></p>
+                <p><strong>Optdigits</strong> (1797 samples, d=9, 10 true classes):</p>
                 <table>
                     <tr>
                         <th>Z</th>
-                        <td>0.5</td>
                         <td>1.0</td>
                         <td>1.5</td>
                         <td>2.0</td>
@@ -232,17 +231,50 @@
                     </tr>
                     <tr>
                         <th>Clusters</th>
-                        <td>21</td>
-                        <td>18</td>
-                        <td>17</td>
-                        <td>17</td>
-                        <td>13</td>
-                        <td>13</td>
+                        <td><strong>11</strong></td>
+                        <td>9</td>
+                        <td>9</td>
+                        <td>8</td>
+                        <td>7</td>
+                    </tr>
+                    <tr>
+                        <th>NMI</th>
+                        <td><strong>0.736</strong></td>
+                        <td>0.650</td>
+                        <td>0.650</td>
+                        <td>0.493</td>
+                        <td>0.474</td>
                     </tr>
                 </table>
-                <p style="margin-top: 20px;">
-                    <strong>Recommendation:</strong> For high-D data (d > 10), use <span class="highlight">Z ≈ 1.5-1.8</span><br>
-                    (larger ε → need lower Z to compensate)
+                <p style="margin-top: 15px;"><strong>Pendigits</strong> (10992 samples, d=6, 10 true classes):</p>
+                <table>
+                    <tr>
+                        <th>Z</th>
+                        <td>1.0</td>
+                        <td>1.5</td>
+                        <td>2.0</td>
+                        <td>2.5</td>
+                        <td>3.0</td>
+                    </tr>
+                    <tr>
+                        <th>Clusters</th>
+                        <td>34</td>
+                        <td>32</td>
+                        <td>25</td>
+                        <td>22</td>
+                        <td>22</td>
+                    </tr>
+                    <tr>
+                        <th>NMI</th>
+                        <td>0.768</td>
+                        <td>0.771</td>
+                        <td><strong>0.784</strong></td>
+                        <td>0.781</td>
+                        <td>0.781</td>
+                    </tr>
+                </table>
+                <p style="margin-top: 10px; font-size: 0.8em;">
+                    DPA finds <span class="highlight">more clusters than ground truth</span> (sub-structure within digit classes)
                 </p>
             </section>
 
@@ -330,6 +362,101 @@
                 </table>
             </section>
 
+            <!-- NUMERICAL RESULTS -->
+            <section>
+                <h2>Numerical Results</h2>
+                <table style="font-size: 0.55em;">
+                    <tr>
+                        <th>Dataset</th>
+                        <th>Metric</th>
+                        <th>DPA</th>
+                        <th>DP</th>
+                        <th>DBSCAN</th>
+                        <th>Spectral*</th>
+                        <th>GMM*</th>
+                    </tr>
+                    <tr>
+                        <td rowspan="3"><strong>Optdigits</strong><br><span class="small">(1797, d=9)</span></td>
+                        <td>NMI</td>
+                        <td>0.736</td>
+                        <td><strong>0.805</strong></td>
+                        <td>0.591</td>
+                        <td>0.789</td>
+                        <td>0.397</td>
+                    </tr>
+                    <tr>
+                        <td>ARI</td>
+                        <td>0.505</td>
+                        <td><strong>0.685</strong></td>
+                        <td>0.248</td>
+                        <td>0.674</td>
+                        <td>0.190</td>
+                    </tr>
+                    <tr>
+                        <td>k</td>
+                        <td>11</td>
+                        <td>17</td>
+                        <td>26</td>
+                        <td>10</td>
+                        <td>10</td>
+                    </tr>
+                    <tr>
+                        <td rowspan="3"><strong>Pendigits</strong><br><span class="small">(10992, d=6)</span></td>
+                        <td>NMI</td>
+                        <td>0.781</td>
+                        <td>0.748</td>
+                        <td>0.706</td>
+                        <td><strong>0.820</strong></td>
+                        <td>0.593</td>
+                    </tr>
+                    <tr>
+                        <td>ARI</td>
+                        <td>0.657</td>
+                        <td>0.492</td>
+                        <td>0.549</td>
+                        <td><strong>0.680</strong></td>
+                        <td>0.432</td>
+                    </tr>
+                    <tr>
+                        <td>k</td>
+                        <td>20</td>
+                        <td>54</td>
+                        <td>56</td>
+                        <td>10</td>
+                        <td>10</td>
+                    </tr>
+                    <tr>
+                        <td rowspan="3"><strong>MNIST 10k</strong><br><span class="small">(10000, d=14)</span></td>
+                        <td>NMI</td>
+                        <td>0.664†</td>
+                        <td>0.463</td>
+                        <td>0.231</td>
+                        <td><strong>0.641</strong></td>
+                        <td>0.315</td>
+                    </tr>
+                    <tr>
+                        <td>ARI</td>
+                        <td><strong>0.438</strong>†</td>
+                        <td>0.228</td>
+                        <td>0.042</td>
+                        <td>0.461</td>
+                        <td>0.114</td>
+                    </tr>
+                    <tr>
+                        <td>k</td>
+                        <td>28†</td>
+                        <td>50</td>
+                        <td>19</td>
+                        <td>10</td>
+                        <td>10</td>
+                    </tr>
+                </table>
+                <p class="small" style="margin-top: 10px;">
+                    *Spectral/GMM receive true k=10 as input. DPA, DP, DBSCAN find k automatically.<br>
+                    †DPA+TD (with Tangent Distance). Paper on 60k: NMI=0.84
+                </p>
+            </section>
+
             <!-- RESULTS OPTDIGITS -->
             <section class="center">
                 <h2>Results: Optdigits</h2>
@@ -352,8 +479,8 @@
             <section class="center">
                 <h2>DPA Topography</h2>
                 <div class="img-row">
-                    <img src="../plots/optdigits_decision_graph.png" alt="Decision Graph" style="max-height: 500px;">
-                    <img src="../plots/optdigits_dendrogram.png" alt="Dendrogram" style="max-height: 500px;">
+                    <img src="../plots/optdigits_decision_graph.png" alt="Decision Graph" style="max-height: 420px; max-width: 45%;">
+                    <img src="../plots/optdigits_dendrogram.png" alt="Dendrogram" style="max-height: 420px; max-width: 45%;">
                 </div>
             </section>
 

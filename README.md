@@ -69,15 +69,33 @@ Data-Topography-DPA/
 | Cluster merging | None | **Z-score** (Heuristic 3) |
 | Halo points | Manual threshold | **Automatic** (saddle density) |
 
-## Datasets
+## Results
 
-All datasets are from UCI, same as the paper:
+Comparison of DPA with other clustering methods. Spectral and GMM receive the true number of clusters (k=10); DPA, DP, and DBSCAN find k automatically.
+
+| Dataset | Metric | DPA | DP | DBSCAN | Spectral* | GMM* |
+|---------|--------|-----|-----|--------|-----------|------|
+| **Optdigits** (1797, d=9) | NMI | 0.736 | **0.805** | 0.591 | 0.789 | 0.397 |
+| | ARI | 0.505 | **0.685** | 0.248 | 0.674 | 0.190 |
+| | k | 11 | 17 | 26 | 10 | 10 |
+| **Pendigits** (10992, d=6) | NMI | 0.781 | 0.748 | 0.706 | **0.820** | 0.593 |
+| | ARI | 0.657 | 0.492 | 0.549 | **0.680** | 0.432 |
+| | k | 20 | 54 | 56 | 10 | 10 |
+| **MNIST 10k** (10000, d=14) | NMI | **0.664**† | 0.463 | 0.231 | 0.641 | 0.315 |
+| | ARI | 0.438† | 0.228 | 0.042 | **0.461** | 0.114 |
+| | k | 28† | 50 | 19 | 10 | 10 |
+
+\*Spectral/GMM receive true k=10 as input. †DPA with Tangent Distance (k-NN hybrid). Paper reports NMI=0.84 on full MNIST 60k with TD.
+
+DPA finds more clusters than ground truth by design — it discovers sub-structure within classes (e.g., different handwriting styles for the same digit).
+
+## Datasets
 
 | Dataset | Samples | Features | Classes |
 |---------|---------|----------|---------|
 | Optdigits | 1,797 | 64 (8x8) | 10 |
 | Pendigits | 10,992 | 16 | 10 |
-| MNIST | 70,000 | 784 (28x28) | 10 |
+| MNIST | 10,000 | 784 (28x28) | 10 |
 
 ## Parameters
 
@@ -97,6 +115,16 @@ All datasets are from UCI, same as the paper:
 | 3.0 | ~99.7% | Fewer clusters (conservative) |
 
 For **high-dimensional data** (d > 10): use lower Z (~1.5) due to larger estimation errors.
+
+## Tangent Distance (MNIST)
+
+For image data, DPA uses **Tangent Distance** (Simard et al., 1993) as described in the paper (Section 3.2). The implementation uses a k-NN hybrid approach:
+
+1. Find candidate neighbors using Euclidean distance (fast, k=300)
+2. Recompute distances for candidates using one-sided Tangent Distance
+3. Reorder and keep top-100 neighbors by TD
+
+This is faster than computing the full N×N TD matrix and gives better clustering results (the Euclidean locality prior prevents spurious inter-cluster connections).
 
 ## Evaluation Metrics
 

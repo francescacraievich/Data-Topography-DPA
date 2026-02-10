@@ -65,34 +65,19 @@ def find_cluster_centers(log_density, epsilon, distances, indices, k_hat):
     sorted_idx = np.argsort(-g)
 
     # For each point, find nearest neighbor with higher g
+    # Search the FULL k-NN list to avoid missing nearby higher-g points
     for rank, i in enumerate(sorted_idx):
         if rank == 0:
             # Point with highest g has no point with higher g
             continue
 
-        # Look through neighbors for point with higher g
-        for j_pos in range(1, min(len(indices[i]), k_hat[i] + 10)):
+        # Search ALL k-NN neighbors for nearest point with higher g
+        for j_pos in range(1, indices.shape[1]):
             j = indices[i, j_pos]
             if g[j] > g[i]:
                 delta[i] = distances[i, j_pos]
                 nearest_higher[i] = j
                 break
-
-        # If not found in neighbors, need broader search
-        if nearest_higher[i] == -1:
-            # Search all points with higher g
-            higher_g_mask = g > g[i]
-            if np.any(higher_g_mask):
-                # Find minimum distance to any point with higher g
-                # This is expensive, so we use a heuristic: check if any
-                # neighbor of neighbors has higher g
-                min_dist = np.inf
-                for j_pos in range(1, len(indices[i])):
-                    j = indices[i, j_pos]
-                    if g[j] > g[i] and distances[i, j_pos] < min_dist:
-                        min_dist = distances[i, j_pos]
-                        nearest_higher[i] = j
-                        delta[i] = min_dist
 
     # Set delta for highest-g point to max delta (following DP convention)
     max_g_idx = sorted_idx[0]
@@ -101,6 +86,15 @@ def find_cluster_centers(log_density, epsilon, distances, indices, k_hat):
         delta[max_g_idx] = np.max(finite_deltas) * 1.1
     else:
         delta[max_g_idx] = np.max(distances[:, -1])
+
+    # Build reverse k-NN map for efficient Condition 2 check
+    # reverse_nn[i] = set of points j that have i in j's k_hat neighborhood
+    # Uses k_hat (optimal neighborhood size) as defined in the paper
+    reverse_nn = defaultdict(set)
+    for j in range(n_samples):
+        k_j = min(k_hat[j], indices.shape[1] - 1)
+        for pos in range(1, k_j + 1):
+            reverse_nn[indices[j, pos]].add(j)
 
     # Find centers using two conditions from Heuristic 1
     centers = []
@@ -111,20 +105,19 @@ def find_cluster_centers(log_density, epsilon, distances, indices, k_hat):
         r_k_i = distances[i, k_i]
 
         # Condition 1: delta_i > r_{k_hat_i}
-        cond1 = delta[i] > r_k_i
+        if delta[i] <= r_k_i:
+            continue  # skip Condition 2 check (optimization)
 
         # Condition 2: i not in neighborhood of any point with higher g
+        # Use reverse k-NN map with FULL k-NN for thorough coverage
+        # Paper: "i does not belong to NN_j for any j with g_j > g_i"
         cond2 = True
-        for j in range(n_samples):
+        for j in reverse_nn.get(i, set()):
             if g[j] > g[i]:
-                # Check if i is in j's optimal neighborhood
-                k_j = min(k_hat[j], distances.shape[1] - 1)
-                # i is in NN_j if i appears in j's first k_j neighbors
-                if i in indices[j, 1:k_j + 1]:
-                    cond2 = False
-                    break
+                cond2 = False
+                break
 
-        if cond1 and cond2:
+        if cond2:
             centers.append(i)
 
     return np.array(centers), delta, nearest_higher
@@ -191,12 +184,17 @@ def assign_to_clusters(g, nearest_higher, centers, n_samples):
     return labels
 
 
-def find_saddle_points(labels, g, log_density, epsilon, distances, indices, k_hat):
+def find_saddle_points(labels, g, log_density, epsilon, distances, indices, k_hat,
+                       centers=None):
     """
-    Algorithm 2 (Heuristic 2): Find saddle points between clusters.
+    Heuristic 2 (Section 2.1.3): Find saddle points between clusters.
 
-    For each pair of adjacent clusters, find the border points and
-    identify the saddle point as the border point with highest g.
+    From the paper: "A point i belonging to cluster c is at the border
+    between c and c' if:
+    1. Its closest point j in c' is within distance r_{k_hat_i}
+    2. i is the closest point to j among those in c"
+
+    The saddle point is the border point with the highest g value.
 
     Parameters
     ----------
@@ -221,6 +219,10 @@ def find_saddle_points(labels, g, log_density, epsilon, distances, indices, k_ha
     k_hat : ndarray of shape (n_samples,)
         Optimal k for each point.
 
+    centers : ndarray or None
+        Cluster center indices. Centers are excluded from being border points
+        (matching official implementation).
+
     Returns
     -------
     saddles : dict
@@ -231,44 +233,76 @@ def find_saddle_points(labels, g, log_density, epsilon, distances, indices, k_ha
         Dictionary {(c1, c2): [list of border point indices]}
     """
     n_samples = len(labels)
-    n_clusters = len(np.unique(labels[labels >= 0]))
+    k_max = indices.shape[1] - 1
+
+    # Build center set for exclusion
+    center_set = set(centers) if centers is not None else set()
 
     saddles = {}
     border_points = defaultdict(list)
 
-    # Find border points for each cluster pair
+    # Step 1: Find border candidates
+    # For each non-center point i, find the FIRST (nearest) neighbor within
+    # k_hat that belongs to a different cluster.
+    # border_dict[i] = {other_cluster: neighbor_index}
+    border_dict = {}
     for i in range(n_samples):
-        if labels[i] < 0:
-            continue  # skip unassigned points
-
-        c_i = labels[i]
-        k_i = min(k_hat[i], indices.shape[1] - 1)
-
-        # Check neighbors within optimal neighborhood
-        for j_pos in range(1, k_i + 1):
-            j = indices[i, j_pos]
-            if labels[j] >= 0 and labels[j] != c_i:
-                # i and j are in different clusters
-                c_j = labels[j]
-
-                # Check if this is a valid border point (Heuristic 2)
-                # i is border if j is its closest point in cluster c_j
-                # and i is the closest point to j among those in c_i
-
-                # Simplified: just record border points
-                pair = tuple(sorted([c_i, c_j]))
-                border_points[pair].append(i)
-                break  # only count once per point
-
-    # Find saddle point for each cluster pair (highest g among border points)
-    for pair, points in border_points.items():
-        if len(points) == 0:
+        if labels[i] < 0 or i in center_set:
             continue
 
-        # Saddle is border point with highest g
-        g_values = g[points]
-        best_idx = np.argmax(g_values)
-        saddle_idx = points[best_idx]
+        c_i = labels[i]
+        k_i = min(k_hat[i], k_max)
+
+        for j_pos in range(1, k_i + 1):
+            j = indices[i, j_pos]
+            if j in center_set:
+                continue
+            if labels[j] >= 0 and labels[j] != c_i:
+                c_j = labels[j]
+                if i not in border_dict:
+                    border_dict[i] = {}
+                border_dict[i][c_j] = j
+                break  # only first different-cluster neighbor
+
+    # Step 2: Reciprocal verification
+    # For each candidate (i, j) where i is in cluster c and j is in cluster cp,
+    # verify from j's side: scan j's full k-NN. If we find i before finding
+    # another point from cluster c, the border is confirmed.
+    confirmed_borders = defaultdict(list)  # (c, cp) -> [(border_idx, g_value)]
+
+    for i, cluster_neighbors in border_dict.items():
+        c_i = labels[i]
+        for c_j, j in cluster_neighbors.items():
+            # Scan j's full neighborhood to verify reciprocity
+            confirmed = False
+            for k_pos in range(1, k_max + 1):
+                z = indices[j, k_pos]
+                if z == i:
+                    # Confirmed: i is the nearest point from cluster c_i
+                    # as seen from j
+                    confirmed = True
+                    break
+                elif labels[z] == c_i:
+                    # Found a closer point from c_i before reaching i
+                    # Border (i, j) is rejected
+                    break
+                # Points from other clusters are skipped
+
+            if confirmed:
+                pair = tuple(sorted([c_i, c_j]))
+                # Both i (from c) and j (from c') are border candidates
+                confirmed_borders[pair].append(i)
+                confirmed_borders[pair].append(j)
+                border_points[pair].append(i)
+
+    # Select saddle for each cluster pair: highest g among confirmed borders
+    for pair, candidates in confirmed_borders.items():
+        if len(candidates) == 0:
+            continue
+
+        g_values = np.array([g[idx] for idx in candidates])
+        best_pos = np.argmax(g_values)
+        saddle_idx = candidates[best_pos]
 
         saddles[pair] = {
             'index': saddle_idx,
@@ -282,120 +316,137 @@ def find_saddle_points(labels, g, log_density, epsilon, distances, indices, k_ha
 
 def merge_insignificant_peaks(centers, saddles, log_density, epsilon, Z):
     """
-    Algorithm 3 (Heuristic 3): Merge clusters with insignificant peaks.
+    Heuristic 3 (Section 2.1.4): Merge clusters with insignificant peaks.
 
-    A cluster c is merged with cluster c' if:
-        log(rho_c) - log(rho_{cc'}) < Z * sqrt(epsilon_c² + epsilon_{cc'}²)
+    From the paper: "A cluster c is merged with a neighbouring cluster c' if:
+      (log rho_c - log rho_{cc'}) < Z * (e_c + e_{cc'})
+    where rho_c is the density of the center of cluster c."
 
-    This tests whether the peak height above the saddle is statistically
-    significant given the estimation errors. The error propagation uses
-    quadrature (root sum of squares) since the errors are independent.
+    The paper specifies iterative merging: "Heuristic 3 is checked for all
+    clusters c and c' in order of decreasing log rho_{cc'}." At each step,
+    the pair with highest border density is merged, then the topography
+    is updated before re-evaluating.
 
     Parameters
     ----------
     centers : ndarray
         Cluster center indices.
-
     saddles : dict
         Saddle point information from find_saddle_points.
-
     log_density : ndarray
         Log-density for all points.
-
     epsilon : ndarray
         Error estimates for all points.
-
     Z : float
-        Significance threshold. Higher Z = more conservative (fewer clusters).
-        - Z=1.0: ~68% confidence
-        - Z=2.0: ~95% confidence
-        - Z=3.0: ~99.7% confidence
+        Significance threshold (only free parameter of DPA).
 
     Returns
     -------
     merged_centers : ndarray
         Remaining centers after merging.
-
     merge_map : dict
         Mapping from original cluster ID to merged cluster ID.
-
     merge_history : list
         List of merge events [(lower_cluster, higher_cluster, saddle_info), ...]
     """
     n_clusters = len(centers)
 
-    # Track which clusters are still active
-    active = np.ones(n_clusters, dtype=bool)
+    # Working copies of border densities and errors
+    rho_bord = defaultdict(lambda: defaultdict(lambda: -np.inf))
+    rho_bord_err = defaultdict(lambda: defaultdict(lambda: 0.0))
 
-    # Track cluster merges (maps original cluster to current root)
-    parent = np.arange(n_clusters)
+    for (c1, c2), info in saddles.items():
+        rho_bord[c1][c2] = info['log_density']
+        rho_bord[c2][c1] = info['log_density']
+        rho_bord_err[c1][c2] = info['epsilon']
+        rho_bord_err[c2][c1] = info['epsilon']
 
-    # History of merges
+    # Track merges
+    merge_target = {}
     merge_history = []
+    active = set(range(n_clusters))
 
-    def find_root(i):
-        """Find root of cluster i with path compression."""
-        if parent[i] != i:
-            parent[i] = find_root(parent[i])
-        return parent[i]
+    # Iterative merging (paper Algorithm 3):
+    # 1. Check all pairs for merge condition
+    # 2. Among mergeable pairs, select the one with highest border density
+    # 3. Merge lower peak into higher peak
+    # 4. Update topography (border inheritance)
+    # 5. Repeat until no more merges
+    while True:
+        best_pair = None
+        best_border = -np.inf
 
-    # Sort saddles by decreasing saddle density
-    sorted_saddles = sorted(
-        saddles.items(),
-        key=lambda x: -x[1]['log_density']
-    )
+        for c in list(active):
+            for cp in list(active):
+                if cp <= c:
+                    continue
+                border_d = rho_bord[c][cp]
+                if border_d == -np.inf:
+                    continue
 
-    # Process saddles in order
-    for pair, saddle_info in sorted_saddles:
-        c1, c2 = pair
+                border_e = rho_bord_err[c][cp]
 
-        # Find current roots
-        r1 = find_root(c1)
-        r2 = find_root(c2)
+                # Test lower peak (paper Heuristic 3)
+                peak_c = log_density[centers[c]]
+                peak_cp = log_density[centers[cp]]
+                if peak_c <= peak_cp:
+                    lower, higher = c, cp
+                else:
+                    lower, higher = cp, c
 
-        if r1 == r2:
-            continue  # already merged
+                peak_d = log_density[centers[lower]]
+                peak_e = epsilon[centers[lower]]
+                height = peak_d - border_d
+                threshold = Z * (peak_e + border_e)
 
-        # Get peak densities
-        peak1_density = log_density[centers[r1]]
-        peak2_density = log_density[centers[r2]]
+                if height < threshold:
+                    if border_d > best_border:
+                        best_border = border_d
+                        best_pair = (lower, higher)
 
-        # Determine which has lower peak
-        if peak1_density < peak2_density:
-            lower_cluster, higher_cluster = r1, r2
-        else:
-            lower_cluster, higher_cluster = r2, r1
+        if best_pair is None:
+            break
 
-        # Get densities and errors
-        peak_density = log_density[centers[lower_cluster]]
-        peak_epsilon = epsilon[centers[lower_cluster]]
-        saddle_density = saddle_info['log_density']
-        saddle_epsilon = saddle_info['epsilon']
+        cmin, cmax = best_pair
+        merge_target[cmin] = cmax
+        merge_history.append((cmin, cmax, {}))
+        active.discard(cmin)
 
-        # Merge criterion (Heuristic 3)
-        # if log(rho_c) - log(rho_{cc'}) < Z * sqrt(epsilon_c² + epsilon_{cc'}²)
-        # Error propagation uses quadrature for independent Gaussian errors
-        height_diff = peak_density - saddle_density
-        error_threshold = Z * np.sqrt(peak_epsilon**2 + saddle_epsilon**2)
+        # Topography inheritance: cmax inherits cmin's borders
+        for cp in list(active):
+            if cp == cmax:
+                continue
+            border_min_cp = rho_bord[cmin][cp]
+            if border_min_cp == -np.inf:
+                continue
+            # If cmax's border with cp is lower, inherit from cmin
+            if rho_bord[cmax][cp] < border_min_cp:
+                rho_bord[cmax][cp] = border_min_cp
+                rho_bord[cp][cmax] = border_min_cp
+                rho_bord_err[cmax][cp] = rho_bord_err[cmin][cp]
+                rho_bord_err[cp][cmax] = rho_bord_err[cmin][cp]
 
-        if height_diff < error_threshold:
-            # Merge lower peak into higher peak
-            parent[lower_cluster] = higher_cluster
-            active[lower_cluster] = False
-            merge_history.append((lower_cluster, higher_cluster, saddle_info))
+        # Clean up cmin borders
+        for cp in list(active):
+            rho_bord[cmin][cp] = -np.inf
+            rho_bord[cp][cmin] = -np.inf
 
     # Build final cluster mapping
+    def find_final(c):
+        while c in merge_target:
+            c = merge_target[c]
+        return c
+
     merge_map = {}
     new_id = 0
     for old_id in range(n_clusters):
-        root = find_root(old_id)
-        if root not in merge_map:
-            merge_map[root] = new_id
+        final = find_final(old_id)
+        if final not in merge_map:
+            merge_map[final] = new_id
             new_id += 1
-        merge_map[old_id] = merge_map[root]
+        merge_map[old_id] = merge_map[final]
 
-    # Get merged centers
-    merged_centers = [centers[i] for i in range(n_clusters) if active[i]]
+    merged_centers = [centers[i] for i in sorted(active)]
 
     return np.array(merged_centers), merge_map, merge_history
 
@@ -585,32 +636,30 @@ class DensityPeaks:
         self.rho_ = 1.0 / (np.mean(distances[:, 1:self.k+1], axis=1) + 1e-10)
 
         # Step 2: Compute delta (distance to nearest higher-density point)
-        self.delta_ = np.zeros(n_samples)
-        nearest_higher = np.zeros(n_samples, dtype=int)
+        # Vectorized: compute full pairwise distance matrix once
+        from sklearn.metrics import pairwise_distances
+        dist_matrix = pairwise_distances(X, metric=self.metric)
+
+        self.delta_ = np.full(n_samples, np.inf)
+        nearest_higher = np.full(n_samples, -1, dtype=int)
 
         # Sort by density (descending)
         rho_order = np.argsort(-self.rho_)
 
-        for i, idx in enumerate(rho_order):
-            if i == 0:
-                # Highest density point: delta = max distance
-                self.delta_[idx] = np.max(distances[idx])
-                nearest_higher[idx] = idx
-            else:
-                # Find nearest point with higher density
-                higher_density_points = rho_order[:i]
-                min_dist = np.inf
-                nearest = idx
+        # For each point, find nearest point with strictly higher density
+        for i in range(1, n_samples):
+            idx = rho_order[i]
+            # All points processed before this one have higher density
+            higher_points = rho_order[:i]
+            dists_to_higher = dist_matrix[idx, higher_points]
+            min_pos = np.argmin(dists_to_higher)
+            self.delta_[idx] = dists_to_higher[min_pos]
+            nearest_higher[idx] = higher_points[min_pos]
 
-                for hdp in higher_density_points:
-                    # Compute distance to this higher-density point
-                    dist = np.linalg.norm(X[idx] - X[hdp])
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest = hdp
-
-                self.delta_[idx] = min_dist
-                nearest_higher[idx] = nearest
+        # Highest density point: delta = max distance to any point
+        top_idx = rho_order[0]
+        self.delta_[top_idx] = np.max(dist_matrix[top_idx])
+        nearest_higher[top_idx] = top_idx
 
         # Step 3: Compute gamma = rho * delta (decision graph score)
         # Normalize for numerical stability

@@ -133,14 +133,19 @@ class TwoNN:
         self.mu_filtered_ = mu_filtered
 
         # Compute empirical CDF
-        # F_emp(mu_i) = (i - 0.5) / n for sorted values
-        n = len(mu_filtered)
-        cdf = (np.arange(1, n + 1) - 0.5) / n
+        # Official implementation: F_emp(mu_i) = i / N_total (0-indexed)
+        # where N_total is the TOTAL number of valid points BEFORE discarding.
+        # This ensures CDF goes up to ~0.9 (not 1.0) when discarding top 10%.
+        N_total = len(valid_mu)
+        n_kept = len(mu_filtered)
+        cdf = np.arange(n_kept) / N_total  # 0-indexed: 0/N, 1/N, ..., (n_kept-1)/N
 
         # Linear regression through origin: y = d * x
         # where x = log(mu), y = -log(1 - F_emp(mu))
         x = np.log(mu_filtered)
         y = -np.log(1 - cdf)
+
+        # First point has cdf=0 → y=0, acts as origin anchor (matching official)
 
         # Slope = d = sum(x*y) / sum(x^2)
         d_raw = linear_regression_through_origin(x, y)

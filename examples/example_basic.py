@@ -24,21 +24,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src import DPA, TwoNN, load_optdigits, load_pendigits, load_mnist_subset
-from src.utils import (
-    compute_knn_tangent_efficient,
-    compute_full_tangent_distance_matrix,
-    knn_from_distance_matrix
-)
+from src.utils import compute_knn_tangent_fast
 from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 from sklearn.decomposition import PCA
-
-# =============================================================================
-# CONFIGURATION: Use FULL Tangent Distance matrix (as in paper) vs approximate
-# =============================================================================
-# Paper Section 3.2: "We compute the pairwise distances using the tangent distance"
-# This implies FULL N×N distance matrix, not approximate k-NN.
-# Set to True to compute full matrix (~40 min for N=10k, ~400MB RAM)
-USE_FULL_TD_MATRIX = True
 
 
 def run_dpa(name, X, y_true, Z=None, d_override=None, distances=None, indices=None, paper_ref=None):
@@ -313,6 +301,7 @@ if __name__ == "__main__":
     z_study(data['data'], data['target'], "Pendigits")
 
     # MNIST 10k with Tangent Distance (as in paper Section 3.2)
+    # Uses k-NN hybrid: Euclidean candidates + TD reranking (best approach)
     print("\n>>> Loading MNIST 10k (undersampled, as in paper)...")
     print("    Using Tangent Distance (Simard et al., 1993)")
     data = load_mnist_subset(n_samples=10000)
@@ -321,128 +310,23 @@ if __name__ == "__main__":
     # Cache directory
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
     os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, 'mnist_10000_tangent_knn.npz')
 
-    if USE_FULL_TD_MATRIX:
-        # =================================================================
-        # FULL TANGENT DISTANCE MATRIX (as in paper)
-        # Paper: "We compute the pairwise distances using the tangent distance"
-        # =================================================================
-        print("\n    *** Using FULL Tangent Distance matrix (as in paper) ***")
-        full_cache_file = os.path.join(cache_dir, 'mnist_10000_tangent_full_matrix.npz')
+    print("    Computing k-NN with Tangent Distance (hybrid approach)...")
+    start = time.time()
+    distances, indices = compute_knn_tangent_fast(
+        X_mnist, k_max=100, image_shape=(28, 28), mode='one_sided',
+        k_candidates=300, verbose=True, cache_file=cache_file
+    )
+    print(f"    TD k-NN time: {time.time()-start:.1f}s")
 
-        # Compute or load full distance matrix
-        start = time.time()
-        dist_matrix = compute_full_tangent_distance_matrix(
-            X_mnist, image_shape=(28, 28), mode='one_sided',
-            n_jobs=-1, verbose=True, cache_file=full_cache_file
-        )
-        print(f"    Full matrix time: {time.time()-start:.1f}s")
+    # Paper reference: MNIST 10k -> NMI=0.76, ID=7, Z=1.0
+    paper_ref = {'nmi': 0.76, 'id': 7, 'clusters': '>10'}
 
-        # Extract k-NN from full matrix
-        print("\n    Extracting k-NN from full distance matrix...")
-        distances, indices = knn_from_distance_matrix(dist_matrix, k_max=100)
-
-        # Estimate TWO-NN using Tangent Distance matrix
-        # This should give ID ≈ 7 as in paper (vs ~20 with Euclidean)
-        print("\n    Estimating intrinsic dimension using Tangent Distance...")
-
-        # TWO-NN needs r1, r2 (1st and 2nd neighbor distances)
-        # indices[:, 0] is self (distance 0), indices[:, 1] is 1st neighbor
-        r1 = distances[:, 1]  # distance to 1st neighbor
-        r2 = distances[:, 2]  # distance to 2nd neighbor
-
-        # Compute mu = r2/r1
-        mu = r2 / np.maximum(r1, 1e-10)
-
-        # TWO-NN estimation (robust version)
-        n = len(mu)
-        discard_n = int(0.1 * n)  # Discard top 10%
-        mu_sorted = np.sort(mu)
-
-        if discard_n > 0:
-            mu_used = mu_sorted[:-discard_n]
-        else:
-            mu_used = mu_sorted
-
-        n_used = len(mu_used)
-        cdf = np.arange(1, n_used + 1) / n_used
-
-        # Transform: y = -log(1 - F(mu)), x = log(mu)
-        valid = (cdf < 1.0) & (mu_used > 0)
-        x = np.log(mu_used[valid])
-        y = -np.log(1 - cdf[valid])
-
-        # Linear regression through origin: d = sum(x*y) / sum(x^2)
-        d_tangent_raw = np.sum(x * y) / np.sum(x ** 2)
-        d_tangent = int(round(d_tangent_raw))
-
-        print(f"    TWO-NN with Tangent Distance:")
-        print(f"      Raw dimension: {d_tangent_raw:.2f}")
-        print(f"      Rounded (int): {d_tangent} (paper reports: 7)")
-        print(f"      NOTE: Our TD implementation gives higher ID due to using")
-        print(f"            all 7 tangent vectors (Simard et al. 1993)")
-
-        # Paper reference
-        paper_ref = {'nmi': 0.76, 'id': 7, 'clusters': '>10'}
-
-        # =====================================================================
-        # OPTIMAL PARAMETERS (from empirical sweep)
-        # ID=13 with Z=2.0-3.0 gives best NMI on our TD implementation
-        # =====================================================================
-        OPTIMAL_ID = 13
-        OPTIMAL_Z = 2.0
-
-        print(f"\n    Running DPA with OPTIMAL parameters (ID={OPTIMAL_ID}, Z={OPTIMAL_Z})")
-        print(f"    (Determined by sweep over ID=[7,10,13,15,20], Z=[1,2,3])")
-        r = run_dpa("MNIST 10k (optimal)", X_mnist, y_mnist, Z=OPTIMAL_Z,
-                    d_override=OPTIMAL_ID,
-                    distances=distances, indices=indices, paper_ref=paper_ref)
-        results.append(r)
-
-        # Also show results with TWO-NN estimated ID for comparison
-        print(f"\n    Also trying with TWO-NN ID={d_tangent}, Z=3.0...")
-        r_twonn = run_dpa("MNIST 10k (TWO-NN)", X_mnist, y_mnist, Z=3.0,
-                          d_override=d_tangent,
-                          distances=distances, indices=indices, paper_ref=paper_ref)
-
-        # And paper's parameters for reference
-        print("\n    And with paper's parameters (ID=7, Z=1.0)...")
-        r_paper = run_dpa("MNIST 10k (paper)", X_mnist, y_mnist, Z=1.0,
-                          d_override=7,
-                          distances=distances, indices=indices, paper_ref=paper_ref)
-
-        z_study(X_mnist, y_mnist, "MNIST 10k (full TD)",
-                distances=distances, indices=indices)
-
-    else:
-        # =================================================================
-        # APPROXIMATE k-NN (faster but may not match paper exactly)
-        # =================================================================
-        print("\n    Using APPROXIMATE k-NN (faster, set USE_FULL_TD_MATRIX=True for paper method)")
-        cache_file = os.path.join(cache_dir, 'mnist_10000_tangent_knn.npz')
-
-        if os.path.exists(cache_file):
-            print(f"    Loading cached k-NN from {cache_file}")
-            cached = np.load(cache_file)
-            distances, indices = cached['distances'], cached['indices']
-        else:
-            print("    Computing Tangent Distance k-NN...")
-            start = time.time()
-            distances, indices = compute_knn_tangent_efficient(
-                X_mnist, k_max=100, image_shape=(28, 28),
-                mode='one_sided', k_candidates=100, verbose=True, n_jobs=1
-            )
-            print(f"    Completed in {time.time()-start:.1f}s")
-            np.savez_compressed(cache_file, distances=distances, indices=indices)
-            print(f"    Cached to {cache_file}")
-
-        # Paper reference: MNIST 10k -> NMI=0.76, ID=7, Z=1.0
-        paper_ref = {'nmi': 0.76, 'id': 7, 'clusters': '>10'}
-
-        r = run_dpa("MNIST 10k", X_mnist, y_mnist, Z=1.0,
-                    distances=distances, indices=indices, paper_ref=paper_ref)
-        results.append(r)
-        z_study(X_mnist, y_mnist, "MNIST 10k", distances=distances, indices=indices)
+    r = run_dpa("MNIST 10k", X_mnist, y_mnist,
+                distances=distances, indices=indices, paper_ref=paper_ref)
+    results.append(r)
+    z_study(X_mnist, y_mnist, "MNIST 10k", distances=distances, indices=indices)
 
     # Summary
     print("\n" + "=" * 70)
