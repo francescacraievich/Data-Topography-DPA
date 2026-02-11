@@ -51,6 +51,9 @@
                 <p style="margin-top: 10px; color: #777; font-size: 0.7em;">
                     Francesca Craievich
                 </p>
+                <aside class="notes">
+                    Welcome everyone. Today I will be presenting DPA, which stands for Density Peak Advanced clustering. This is a paper published in 2021 in the journal Information Sciences by d'Errico, Facco, Laio, and Rodriguez. The paper builds upon the classic Density Peaks algorithm from 2014 by Rodriguez and Laio, and addresses several of its key limitations. The central idea is to make clustering fully automatic, requiring only a single interpretable parameter, while providing rigorous error quantification based on information theory. I implemented this algorithm from scratch following the paper and the official reference code, and I will walk you through the method, its strengths, its limitations, and how it compares against other popular clustering algorithms on real-world datasets.
+                </aside>
             </section>
 
             <!-- OUTLINE -->
@@ -69,6 +72,9 @@
                     <li><strong>Comparison with Other Methods</strong></li>
                     <li>Results & Demo</li>
                 </ol>
+                <aside class="notes">
+                    Here is the outline of the presentation. We will start by motivating why DPA is needed, looking at the limitations of the original Density Peaks algorithm. Then we will go through the three main building blocks of the method: first, TWO-NN, which is used to estimate the intrinsic dimension of the data; second, PAk, the adaptive density estimator that uses a Likelihood Ratio Test to find the optimal number of neighbors for each point; and third, the three heuristics that handle center detection, saddle point identification, and statistical merging. After that, we will discuss the hyperparameters, in particular the Z parameter which is the only tunable parameter of DPA, and the limitations of the method. Finally, we will compare DPA against four other popular clustering algorithms on three real-world datasets and discuss the results.
+                </aside>
             </section>
 
             <!-- MOTIVATION -->
@@ -95,6 +101,9 @@
                         </ul>
                     </div>
                 </div>
+                <aside class="notes">
+                    Let us start with the motivation. The original Density Peaks algorithm, published by Rodriguez and Laio in Science in 2014, introduced a very elegant idea: cluster centers are points that have both a high local density and a large distance to any point with higher density. However, DP has four major limitations. First, the selection of cluster centers requires manual inspection of a so-called decision graph, where the user has to visually identify which points are centers. This is subjective and does not scale. Second, the density is estimated using a fixed number of nearest neighbors k, which is the same for all points regardless of the local structure of the data. Third, there is no quantification of the estimation error on the density, so we cannot assess how reliable our density estimates are. Fourth, once clusters are formed, there is no principled way to decide whether two adjacent density peaks should be merged into a single cluster or kept separate. DPA addresses all four of these issues systematically. It introduces automatic center detection using a geometric criterion, adaptive density estimation via the PAk method with a Likelihood Ratio Test, error bounds derived from Fisher Information theory, and a statistical merging procedure based on a Z-test that compares peak heights to saddle point densities.
+                </aside>
             </section>
 
             <!-- DPA OVERVIEW -->
@@ -111,6 +120,9 @@
                 <p style="margin-top: 30px; color: #58a6ff;">
                     <strong>Key advantage:</strong> Only ONE parameter (Z)!
                 </p>
+                <aside class="notes">
+                    Here is a high-level overview of the DPA pipeline. The algorithm proceeds in six main steps. Step 1: we estimate the intrinsic dimension d of the dataset using the TWO-NN method. This is important because the density estimation formula depends on d, and using the ambient dimension (for example 784 for MNIST) would give completely wrong density values. Step 2: we compute an adaptive density estimate for every point using the PAk estimator, which automatically selects the optimal number of neighbors k for each point via a Likelihood Ratio Test. This also gives us error bounds on each density estimate through the Fisher Information. Step 3, Heuristic 1: we automatically identify cluster centers. These are points whose distance delta to any denser point is larger than their k-hat nearest neighbor radius, meaning they are isolated density peaks. Step 4, Heuristic 2: for each pair of adjacent clusters, we find the saddle point, which is the point of highest density along the border between two clusters. Step 5, Heuristic 3: we perform iterative merging. For each pair of clusters connected by a saddle, we test whether the peak-to-saddle density difference is statistically significant. If the difference is smaller than Z times the combined estimation error, the two clusters are merged. Step 6: all remaining non-center points are assigned to clusters by following the density gradient, each point being assigned to the same cluster as its nearest neighbor with higher density. The key advantage of this whole pipeline is that it depends on a single parameter Z, which has a clear statistical interpretation as a confidence level.
+                </aside>
             </section>
 
             <!-- TWO-NN -->
@@ -130,6 +142,9 @@
                     <li>Optdigits: 64 features → d ≈ 8-9</li>
                     <li>MNIST: 784 features → d ≈ 12-14</li>
                 </ul>
+                <aside class="notes">
+                    The first building block of DPA is the TWO-NN estimator for the intrinsic dimension. Real-world datasets are often embedded in a high-dimensional ambient space, but the data actually lives on a much lower-dimensional manifold. For example, MNIST images have 784 pixels, but the manifold of handwritten digits has an intrinsic dimension of roughly 12 to 14. Estimating this intrinsic dimension correctly is crucial because the PAk density estimator uses d in its formula. If we used the ambient dimension, the density estimates would be completely wrong. The TWO-NN method, published by Facco et al. in 2017, uses a remarkably simple idea. For each data point, we compute the ratio mu between the distance to its second nearest neighbor and the distance to its first nearest neighbor. Under the assumption of locally uniform density, this ratio follows a Pareto distribution with shape parameter equal to the intrinsic dimension d. The CDF is F(mu) = 1 minus mu to the power of negative d. So we can estimate d by fitting this distribution to the empirical CDF of all the mu values in the dataset, using a simple linear regression on the log-log scale. This is an elegant result because it only requires the two nearest neighbors of each point, making it very efficient and robust. In practice, we also discard a fraction of points with the largest mu values, because those are points near density boundaries where the uniformity assumption breaks down. In our experiments, Optdigits with 64 ambient features has an intrinsic dimension of about 8 to 9, and MNIST with 784 features has an intrinsic dimension of about 12 to 14.
+                </aside>
             </section>
 
             <!-- PAk -->
@@ -148,6 +163,9 @@
                 <p style="text-align: center; background: rgba(255,107,107,0.1); padding: 15px; border-radius: 10px;">
                     ε = √(4(k̂+2) / ((k̂-1)·k̂))
                 </p>
+                <aside class="notes">
+                    The second building block is PAk, which stands for Point Adaptive k-nearest-neighbor density estimator. The standard approach to density estimation in clustering is to use k-NN with a fixed k for all points. But this is problematic: in dense regions, a small k is sufficient and gives a precise estimate; in sparse regions, we need a larger k to get a reliable estimate, but if we use the same large k everywhere, we lose resolution in the dense regions. PAk solves this by choosing k adaptively for each point. The idea is to start from a small k and increase it, testing at each step whether the density is still approximately constant within the k-neighborhood. This is done using a Likelihood Ratio Test. Specifically, the density within a sphere of radius r_k around a point is modeled as a Poisson process with parameter proportional to rho times r_k to the power d. The test statistic D_k compares the log-likelihood of the density estimated using k+1 neighbors against the density estimated using k neighbors. When D_k exceeds a chi-squared threshold with one degree of freedom, it means that the density is no longer constant within the k-neighborhood, so we stop and use k-hat, the last k for which the density was still approximately uniform. A crucial output of PAk is not just the density estimate but also the estimation error. Using Fisher Information theory, the relative error on the log-density is given by epsilon equals the square root of 4 times k-hat plus 2, divided by k-hat minus 1 times k-hat. This error decreases as k-hat increases, which makes intuitive sense: more neighbors means a more precise estimate. These error bounds are essential for the merging step in Heuristic 3, because they allow us to determine whether the difference between two density values is statistically significant.
+                </aside>
             </section>
 
             <!-- HEURISTICS -->
@@ -179,6 +197,9 @@
                 <p style="margin-top: 20px;">
                     <strong>g = log(ρ) - ε</strong> (error-adjusted density)
                 </p>
+                <aside class="notes">
+                    Now let us look at the three heuristics that form the core of the DPA clustering procedure. Heuristic 1 is responsible for automatically detecting cluster centers. In the original DP algorithm, centers were identified manually from the decision graph by looking for points with high rho and high delta. DPA replaces this with a geometric criterion. A point i is a cluster center if two conditions are met. First, its delta value, which is the distance to the nearest point with higher density, must be larger than the radius of its k-hat neighborhood. Intuitively, this means the point is a genuine isolated peak, not just a local fluctuation within a larger cluster. Second, the point must not fall within the k-hat neighborhood of any other point with higher error-adjusted density g. This second condition prevents false positives in noisy regions. The quantity g is defined as log-rho minus epsilon, which is the density adjusted downward by its estimation error. This is a conservative estimate of the density. Heuristic 2 identifies saddle points between pairs of adjacent clusters. A saddle point is defined as the point with the highest g value among all border points between two clusters. A border point is a point in cluster A that has at least one of its k-hat nearest neighbors in cluster B, or vice versa. The saddle point represents the "mountain pass" between two density peaks and is used to decide whether the two peaks should be merged. Heuristic 3 performs iterative merging. For each pair of clusters connected by a saddle, we compare the peak density to the saddle density. If the difference log-rho-peak minus log-rho-saddle is smaller than Z times the sum of the errors of the peak and the saddle, then the peak is not statistically significantly higher than the saddle, and the two clusters are merged. This is done iteratively: at each step, the pair with the highest saddle density is merged first, then the saddle points are recomputed, and the process repeats until no more merges are possible.
+                </aside>
             </section>
 
             <!-- Z PARAMETER -->
@@ -194,25 +215,24 @@
                 <table>
                     <tr>
                         <th>Z</th>
-                        <th>Confidence</th>
                         <th>Effect</th>
                     </tr>
                     <tr>
                         <td>1.0</td>
-                        <td>68%</td>
                         <td>More clusters (liberal)</td>
                     </tr>
                     <tr>
                         <td>2.0</td>
-                        <td>95%</td>
                         <td>Balanced (default)</td>
                     </tr>
                     <tr>
                         <td>3.0</td>
-                        <td>99.7%</td>
                         <td>Fewer clusters (conservative)</td>
                     </tr>
                 </table>
+                <aside class="notes">
+                    The Z parameter is the only tunable hyperparameter of DPA, and it has a clear statistical interpretation. It controls the merging threshold in Heuristic 3. The merge criterion says: merge two clusters if the log-density of the peak minus the log-density of the saddle is less than Z times the combined estimation error. If we think of the density estimates as normally distributed around their true value, then Z corresponds to a confidence level from the standard normal distribution. Z equals 1 corresponds to roughly 68 percent confidence: we merge unless we are at least 68 percent sure the peak is genuinely higher than the saddle. This is liberal, meaning we keep more clusters because we only merge when the evidence is very strong. Z equals 2 corresponds to 95 percent confidence, which is the recommended default. Z equals 3 corresponds to 99.7 percent confidence: we merge very aggressively, keeping only the most prominent, unambiguous peaks. In practice, the choice of Z provides a natural way to explore the data at different resolutions. Low Z reveals fine-grained sub-structure, while high Z shows only the major clusters. This is fundamentally different from algorithms like k-means or Spectral Clustering, where the number of clusters must be specified upfront. DPA discovers the number of clusters automatically for a given significance level.
+                </aside>
             </section>
 
             <!-- Z SENSITIVITY -->
@@ -276,6 +296,9 @@
                 <p style="margin-top: 10px; font-size: 0.8em;">
                     DPA finds <span class="highlight">more clusters than ground truth</span> (sub-structure within digit classes)
                 </p>
+                <aside class="notes">
+                    This slide shows how the Z parameter affects the clustering results on two real datasets. On Optdigits, which has 1797 samples and an estimated intrinsic dimension of 9, we see that at Z equals 1 we get 11 clusters with the best NMI of 0.736. As we increase Z, the number of clusters decreases because more peaks get merged together: at Z equals 3, we only get 7 clusters. The NMI also drops because merging too aggressively combines distinct digit classes. On Pendigits, which is a larger dataset with about 11,000 samples and intrinsic dimension 6, the behavior is more stable. The NMI is relatively flat between 0.768 and 0.784 across all Z values, with the best at Z equals 2. The number of clusters ranges from 34 at Z equals 1 down to 22 at Z equals 3. An important observation is that DPA consistently finds more clusters than the 10 ground-truth classes. This is not a bug but a feature of the algorithm. DPA discovers sub-structure within the digit classes. For example, the digit 1 can be written in different styles: some people write it as a straight vertical line, others with a serif or a slanted stroke. These are genuine density peaks in the data that DPA correctly identifies. The ground truth labels do not capture this intra-class variability, so metrics like ARI and NMI penalize the algorithm even though it is finding real structure.
+                </aside>
             </section>
 
             <!-- LIMITATIONS -->
@@ -305,6 +328,9 @@
                         </ul>
                     </div>
                 </div>
+                <aside class="notes">
+                    Let us now discuss the limitations of DPA. The first and most important limitation is related to high intrinsic dimensionality. When d exceeds approximately 15, the PAk density estimation starts to degrade. This is because in high dimensions, the volume of a sphere grows extremely fast with the radius, and the k-nearest-neighbor distances become very similar for all points, a phenomenon known as the curse of dimensionality. The density estimates become noisy and unreliable, which propagates into poor cluster detection. To mitigate this, the authors suggest using a lower Z value for high-dimensional data, because the estimation errors are larger and we need to be more conservative about merging. The second limitation is computational cost. DPA has complexity of order N times k-max times log N, where N is the number of samples and k-max is the maximum number of neighbors considered in PAk. This is significantly slower than simple algorithms like k-means which is linear in N. However, the k-NN computation can be accelerated using approximate nearest neighbor libraries such as FAISS. The third limitation concerns image data specifically. Euclidean distance in pixel space is a poor metric for images because it does not account for natural transformations like small translations, rotations, or scaling. The paper addresses this by using Tangent Distance, which I will discuss in the results section. The fourth limitation is that DPA, like all density-based methods, struggles with data that has uniform density and no natural peaks. In such cases, the decision graph can help diagnose the problem.
+                </aside>
             </section>
 
             <!-- COMPARISON TABLE -->
@@ -360,6 +386,9 @@
                         <td class="cons">No</td>
                     </tr>
                 </table>
+                <aside class="notes">
+                    This table provides a qualitative comparison of DPA against four other popular clustering algorithms. Starting with automatic cluster detection: DPA automatically determines the number of clusters through the Z-test merging procedure. The original Density Peaks requires the user to manually select centers from the decision graph, which is subjective and not reproducible. DBSCAN technically finds the number of clusters automatically, but in practice the result is highly sensitive to the epsilon parameter, especially in high dimensions, making it unreliable. Spectral Clustering and GMM both require the number of clusters k to be specified in advance. GMM can use the Bayesian Information Criterion to select k, but this adds another layer of model selection. In terms of parameters, DPA has only Z. DP needs k for density estimation and a threshold for center selection. DBSCAN needs epsilon and min-points. Spectral needs k. GMM needs k and a choice of covariance structure. Regarding non-convex cluster shapes, DPA, DP, DBSCAN, and Spectral can all handle them because they are based on density or graph connectivity rather than centroids. GMM assumes Gaussian-shaped clusters, so it cannot naturally handle non-convex shapes. A unique advantage of DPA is error quantification through Fisher Information. No other method in this comparison provides rigorous statistical bounds on its density estimates. Finally, DPA is the only method that produces a topographic analysis of the data, including a dendrogram that shows how clusters relate to each other through saddle points and at what significance level they merge.
+                </aside>
             </section>
 
             <!-- NUMERICAL RESULTS -->
@@ -453,35 +482,50 @@
                 </table>
                 <p class="small" style="margin-top: 10px;">
                     *Spectral/GMM receive true k=10 as input. DPA, DP, DBSCAN find k automatically.<br>
-                    †DPA+TD (with Tangent Distance). Paper on 60k: NMI=0.84
+                    †DPA+TD (with Tangent Distance)
                 </p>
+                <aside class="notes">
+                    This table shows the quantitative comparison across three datasets using NMI, ARI, and the number of clusters found. It is important to note that the comparison is not entirely fair: Spectral Clustering and GMM receive the true number of clusters k equals 10 as input, which is a significant advantage. DPA, DP, and DBSCAN must discover k on their own. Starting with Optdigits, which has 1797 samples of 8 by 8 handwritten digit images with an intrinsic dimension of 9. On this dataset, the standard Density Peaks algorithm achieves the best results with NMI 0.805 and ARI 0.685, finding 17 clusters. DPA gets NMI 0.736 and ARI 0.505 with 11 clusters. Spectral performs very well too with NMI 0.789, benefiting from knowing the true k. DBSCAN and GMM perform poorly. DP outperforms DPA here partly because Optdigits is a relatively small, well-separated dataset where the manual decision graph actually works well, and DP's 17 clusters happen to align better with the sub-structure. On Pendigits, which is a larger dataset with about 11,000 samples and intrinsic dimension 6, Spectral leads with NMI 0.820 and ARI 0.680, but remember it receives k equals 10. DPA achieves a strong NMI of 0.781 and ARI of 0.657 with 20 clusters, outperforming DP which gets NMI 0.748 and ARI 0.492 with 54 clusters. DP finds too many clusters here because it cannot merge, while DPA's merging procedure consolidates the peaks more effectively. DBSCAN finds 56 clusters with moderate performance. On MNIST 10k, which is the most challenging dataset with 784 features and intrinsic dimension 14, we use DPA with Tangent Distance, marked with a dagger. DPA plus TD achieves the best NMI of 0.664 and competitive ARI of 0.438 with 28 clusters. Spectral gets ARI 0.461 with its known k equals 10. Standard DP gets NMI 0.463, and DBSCAN essentially fails with ARI 0.042 because in 784 dimensions, almost all points are classified as noise. GMM also struggles with NMI 0.315. The paper reports NMI of 0.84 on the full MNIST 60k dataset with Tangent Distance, which we cannot reproduce here because we use only a 10k subset and our implementation may differ in some details.
+                </aside>
             </section>
 
             <!-- RESULTS OPTDIGITS -->
             <section class="center">
                 <h2>Results: Optdigits</h2>
                 <img src="../plots/comparison_optdigits.png" alt="Comparison Optdigits" style="max-height: 580px; max-width: 95%;">
+                <aside class="notes">
+                    Here we see the visual comparison on Optdigits, projected to 2D via PCA for visualization purposes only. The top-left panel shows the ground truth with the 10 digit classes. Each subsequent panel shows the clustering output of one method. Looking at DPA, we can see that it identifies 11 clusters that broadly correspond to the digit classes, though some classes are split. DP finds 17 clusters, which is more fragmented but each fragment tends to be pure, which explains its higher NMI. DBSCAN finds 26 clusters with many small, scattered groups, and several gray points which are noise points that DBSCAN could not assign to any cluster. Spectral Clustering, with the true k equals 10, produces a clean partition that closely matches the ground truth. GMM with k equals 10 performs the worst visually, assigning points in ways that clearly do not follow the natural cluster boundaries, because GMM assumes Gaussian-shaped clusters which is a poor assumption for digit data in the PCA-projected space.
+                </aside>
             </section>
 
             <!-- RESULTS PENDIGITS -->
             <section class="center">
                 <h2>Results: Pendigits</h2>
                 <img src="../plots/comparison_pendigits.png" alt="Comparison Pendigits" style="max-height: 580px; max-width: 95%;">
+                <aside class="notes">
+                    On Pendigits we see a different picture. This dataset has about 11,000 samples with 16 features, so the intrinsic dimension is lower at 6, and the clusters are generally better separated. DPA produces 20 clusters that capture the main structure well. Notice how DPA splits some digit classes into sub-clusters, reflecting genuine variability in handwriting style. DP produces 54 clusters, which is excessive fragmentation. Without a merging step, DP detects every small density fluctuation as a separate cluster. This is precisely the problem that DPA's Heuristic 3 was designed to solve. DBSCAN similarly produces 56 clusters with many noise points. Spectral Clustering gives the cleanest result with its known k equals 10, and GMM performs moderately. This dataset illustrates well the advantage of DPA over DP: the merging procedure consolidates spurious peaks while preserving the meaningful ones, resulting in far fewer but more meaningful clusters.
+                </aside>
             </section>
 
             <!-- RESULTS MNIST -->
             <section class="center">
                 <h2>Results: MNIST</h2>
                 <img src="../plots/comparison_mnist.png" alt="Comparison MNIST" style="max-height: 580px; max-width: 95%;">
+                <aside class="notes">
+                    MNIST is the most challenging dataset in our comparison. It has 10,000 samples with 784 features, each being a 28 by 28 grayscale image of a handwritten digit. The intrinsic dimension is estimated at 14, which is in the range where PAk estimation starts to degrade. A crucial point here is the choice of distance metric. Standard Euclidean distance in pixel space is a poor metric for images because a small translation of one pixel shifts all 784 values, creating a large Euclidean distance even though the image is visually identical. This is why the paper recommends using Tangent Distance for image data. Tangent Distance, introduced by Simard, Le Cun, and Denker in 1993, measures the distance between two images after accounting for small geometric transformations such as horizontal and vertical translations, rotation, scaling, and line thickness changes. For each image, we compute tangent vectors that represent the directions in pixel space corresponding to these transformations. The one-sided tangent distance from image A to image B is then the minimum Euclidean distance from B to the tangent plane of A. In our implementation, we use a k-NN hybrid approach: first, we find the 300 nearest neighbors using fast Euclidean distance, then we recompute the distances for these candidates using Tangent Distance, and finally we keep the 100 nearest neighbors by TD. This hybrid approach is both faster than computing the full N-by-N Tangent Distance matrix and gives better clustering results, because the Euclidean pre-filtering acts as a locality prior that prevents spurious connections between distant images that happen to have small tangent distance. Looking at the results, DPA with Tangent Distance finds 28 clusters and achieves the best NMI of 0.664, outperforming all other methods. Standard DP finds 50 clusters with much lower NMI. DBSCAN essentially fails on this dataset: the gray points in the plot are noise points, and in 784 dimensions almost all points are classified as noise because the epsilon ball around each point is nearly empty due to the curse of dimensionality. Spectral with k equals 10 achieves ARI 0.461 but lower NMI than DPA. GMM also struggles significantly.
+                </aside>
             </section>
 
             <!-- DPA TOPOGRAPHY -->
             <section class="center">
                 <h2>DPA Topography</h2>
                 <div class="img-row">
-                    <img src="../plots/optdigits_decision_graph.png" alt="Decision Graph" style="max-height: 420px; max-width: 45%;">
-                    <img src="../plots/optdigits_dendrogram.png" alt="Dendrogram" style="max-height: 420px; max-width: 45%;">
+                    <img src="../plots/pendigits_decision_graph.png" alt="Decision Graph" style="max-height: 420px; max-width: 45%;">
+                    <img src="../plots/pendigits_dendrogram.png" alt="Dendrogram" style="max-height: 420px; max-width: 45%;">
                 </div>
+                <aside class="notes">
+                    One of the unique features of DPA compared to other clustering algorithms is its topographic analysis. Here we see two diagnostic plots for the Pendigits dataset. On the left is the decision graph, which is analogous to the one used in the original Density Peaks algorithm. Each point is plotted with its log-density rho on the x-axis and its delta, the distance to the nearest denser point, on the y-axis. Cluster centers are the points in the upper-right region of this plot: they have high density and high delta, meaning they are isolated density peaks. Points that are colored are identified as cluster centers by Heuristic 1. The remaining points, shown in gray, are non-centers that will be assigned to the nearest center by following the density gradient. Unlike the original DP where the user had to manually draw a threshold line on this graph, DPA's Heuristic 1 automatically selects the centers using the geometric criterion we discussed earlier. On the right is the dendrogram, which is unique to DPA and is not available in any of the other algorithms we compared. The dendrogram shows the hierarchical relationship between clusters. Each leaf at the bottom represents a final cluster. The height at which two clusters are connected represents the density of their saddle point: a high connection means the two clusters are separated by a deep valley in the density landscape, while a low connection means they are only weakly separated. The dashed horizontal lines indicate the saddle densities at which merging decisions were made by Heuristic 3. This visualization is extremely valuable for data interpretation because it reveals how the data is organized at multiple scales: which clusters are closely related and which are clearly distinct. For example, you might see that two clusters corresponding to similar digit shapes, like 3 and 8, are connected at a higher saddle density than two very different digits, like 1 and 0.
+                </aside>
             </section>
 
             <!-- CONCLUSIONS -->
@@ -492,8 +536,10 @@
                     <li><strong>Single parameter Z</strong> with clear statistical meaning</li>
                     <li><strong>Error quantification</strong> via Fisher Information</li>
                     <li><strong>Topographic analysis</strong> for cluster interpretation</li>
-                    <li>Works well on <strong>real high-D data</strong> (UCI datasets)</li>
                 </ul>
+                <aside class="notes">
+                    To summarize, DPA provides a principled and fully automatic framework for density-based clustering. First, it automates what the original Density Peaks required manual intervention for: center selection is now automatic via Heuristic 1, and cluster merging is now statistical via Heuristic 3. Second, DPA depends on a single parameter Z, which has a clear interpretation as a statistical confidence level. This is a major practical advantage compared to algorithms like DBSCAN which require tuning epsilon and min-points, or k-means and Spectral which require specifying k. Third, DPA is the only method in our comparison that provides error quantification on the density estimates, derived from Fisher Information theory. This is not just a theoretical nicety: the error bounds are directly used in the merging decision, making the algorithm's behavior principled and interpretable. Fourth, the topographic analysis, including the decision graph and the dendrogram, provides unique interpretability. No other clustering algorithm gives you a hierarchical view of how clusters relate to each other through saddle point densities. Fifth, we demonstrated that DPA works well on real high-dimensional data. On Pendigits and MNIST with Tangent Distance, DPA achieves competitive or superior results compared to methods that receive the true number of clusters as input. The main limitations are computational cost, sensitivity to very high intrinsic dimensions, and the need for an appropriate distance metric on image data. Overall, DPA represents a significant step forward in making density-based clustering practical, automatic, and statistically rigorous.
+                </aside>
             </section>
 
             <!-- THANK YOU -->
@@ -505,6 +551,9 @@
                 <p style="margin-top: 60px; color: #888; font-size: 0.8em;">
                     Code: github.com/francescacraievich/Data-Topography-DPA
                 </p>
+                <aside class="notes">
+                    Thank you for your attention. The full implementation, including all the code for DPA, the comparison experiments, and the Tangent Distance computation, is available on GitHub. I am happy to take any questions you might have about the algorithm, the implementation, or the experimental results.
+                </aside>
             </section>
 
         </div>
@@ -512,6 +561,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/dist/reveal.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/math/math.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.5.0/plugin/notes/notes.js"></script>
     <script>
         Reveal.initialize({
             hash: true,
@@ -523,7 +573,7 @@
             minScale: 0.2,
             maxScale: 2.0,
             center: true,
-            plugins: [ RevealMath.KaTeX ]
+            plugins: [ RevealMath.KaTeX, RevealNotes ]
         });
     </script>
 </body>
