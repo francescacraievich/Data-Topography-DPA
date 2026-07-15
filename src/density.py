@@ -12,7 +12,17 @@ The systematic correction α accounts for linear density gradients:
     log(ρ(r)) = log(ρ_0) + α·r
 
 This 2-parameter model provides more accurate estimates when density
-varies within the neighborhood of a point.
+varies within the neighborhood of a point. It is fit by a damped,
+step-clamped Newton-Raphson search (not an unregularized linear
+regression), matching the official reference implementation
+(github.com/mariaderrico/DPA, src/Pipeline/_PAk.pyx, function nrmaxl) -
+the damping/clamping is what keeps the fit well-behaved even when k_hat
+is small, where an unregularized fit is numerically unstable.
+
+The stopping criterion (Likelihood Ratio Test) compares point i's local
+volume estimate against a DIFFERENT nearby point's estimate (i's own
+(k+1)-th neighbor), not point i's own estimate as k grows - a two-sample
+Poisson-rate-equality test, matching _PAk.pyx's ratio_test.
 """
 
 import numpy as np
@@ -39,8 +49,10 @@ class PAk:
     k_max : int, default=100
         Maximum number of neighbors to consider.
 
-    k_min : int, default=4
-        Minimum number of neighbors (for numerical stability).
+    k_min : int, default=3
+        Minimum number of neighbors before the Likelihood Ratio Test is
+        first evaluated (matches the official reference implementation,
+        which hardcodes this to 3).
 
     D_thr : float, default=23.928
         Likelihood ratio test threshold.
@@ -50,9 +62,10 @@ class PAk:
         Distance metric for neighbor computation.
 
     use_alpha_correction : bool, default=True
-        Whether to use the systematic correction α for density gradients.
-        When True, estimates log(ρ(r)) = log(ρ_0) + α·r, providing more
-        accurate estimates in regions with varying density.
+        Whether to refine the log-density estimate with the systematic
+        correction α for density gradients (log(ρ(r)) = log(ρ_0) + α·r),
+        via a damped Newton-Raphson fit. When False, the plain
+        1-parameter MLE log(k_hat / V_k_hat) is used.
 
     Attributes
     ----------
@@ -86,13 +99,14 @@ class PAk:
         log(ρ(r)) = log(ρ_0) + α·r
 
     This accounts for linear density gradients within the neighborhood.
-    The 2-parameter Fisher Information matrix gives the error formula:
-        Var(log(ρ_0)) = 4*(k_hat + 2) / ((k_hat - 1) * k_hat)
+    The Fisher Information matrix gives the error formula:
+        Var(log(ρ_0)) = (4*k_hat + 2) / (k_hat * (k_hat - 1))
 
-    Reference: d'Errico et al. (2021), Supplementary Information Text S1.
+    Reference: d'Errico et al. (2021), Supplementary Information Text S1;
+    github.com/mariaderrico/DPA.
     """
 
-    def __init__(self, d=None, k_max=100, k_min=4, D_thr=23.928, metric='euclidean',
+    def __init__(self, d=None, k_max=100, k_min=3, D_thr=23.928, metric='euclidean',
                  use_alpha_correction=True):
         self.d = d
         self.k_max = k_max
@@ -160,10 +174,17 @@ class PAk:
         self.epsilon_ = np.zeros(n_samples)
         self.alpha_ = np.zeros(n_samples)  # Systematic correction
 
-        # For each point, find optimal k using Likelihood Ratio Test
+        # Shared cache of cumulative neighbor volumes, keyed by point index
+        # then neighbor rank: V_dic[idx][k] = volume enclosing idx's k
+        # nearest neighbors. Shared across all points because the LRT below
+        # compares point i against a DIFFERENT point j, so j's volumes get
+        # cached here too and reused once j is itself processed as "i".
+        V_dic = {}
+
+        # For each point, find optimal k using the Likelihood Ratio Test
         for i in range(n_samples):
             k_hat, log_rho, eps, alpha = self._estimate_density_point(
-                i, distances[i], self.d_, omega_d
+                i, distances, indices, self.d_, omega_d, V_dic
             )
             self.k_hat_[i] = k_hat
             self.log_density_[i] = log_rho
@@ -175,23 +196,30 @@ class PAk:
 
         return self
 
-    def _estimate_density_point(self, i, dist_i, d, omega_d):
+    def _estimate_density_point(self, i, distances, indices, d, omega_d, V_dic):
         """
-        Estimate density for a single point using Likelihood Ratio Test.
-
-        Optionally applies the systematic correction α to account for
-        density gradients: log(ρ(r)) = log(ρ_0) + α·r
+        Estimate density for point i using the two-sample Likelihood Ratio
+        Test (matches the official reference implementation's ratio_test):
+        at each candidate k, compares point i's own k-th-neighbor volume
+        against the k-th-neighbor volume of i's (k+1)-th nearest neighbor
+        j - a test of whether i and the nearby point j have statistically
+        compatible local densities - rather than testing i's own
+        self-consistency as k grows.
 
         Parameters
         ----------
         i : int
             Point index.
-        dist_i : ndarray
-            Distances to neighbors for point i.
+        distances, indices : ndarray of shape (n_samples, k_max+1)
+            Full k-NN distance/index matrices (need point j's own row too).
         d : float
             Intrinsic dimension.
         omega_d : float
             Volume of unit d-ball.
+        V_dic : dict
+            Shared cache {point_idx: {neighbor_rank: cumulative_volume}},
+            reused across all points (population points' entries get
+            reused once they're processed as "i" themselves).
 
         Returns
         -------
@@ -202,197 +230,172 @@ class PAk:
         epsilon : float
             Error estimate.
         alpha : float
-            Systematic correction parameter (density gradient).
+            Systematic correction parameter (density gradient), diagnostic
+            only - not used by the official implementation but retained
+            here since our downstream code inspects it.
         """
-        k_max_actual = len(dist_i) - 1  # -1 because index 0 is self
-        k_max_actual = min(k_max_actual, self.k_max)
+        k_max_actual = min(distances.shape[1] - 1, self.k_max)
 
-        # Start with minimum k
+        def get_volume(idx, k):
+            cache = V_dic.setdefault(idx, {})
+            v = cache.get(k)
+            if v is None:
+                r = distances[idx][k]
+                v = omega_d * (r ** d) if r > 0 else 0.0
+                cache[k] = v
+            return v
+
+        # Pre-populate shells 1..k_min so the later Newton-Raphson refinement
+        # always has an unbroken cumulative-volume sequence to work with,
+        # matching the official implementation's eager seeding of V_dic[i].
+        for k0 in range(1, self.k_min + 1):
+            get_volume(i, k0)
+
         k = self.k_min
-
-        # Previous volume for computing shell volumes
-        r_prev = 0.0
-
-        # Cumulative volume
-        V_cumulative = 0.0
-
-        # Iterate until LRT threshold exceeded or k_max reached
-        while k <= k_max_actual:
-            # Distance to k-th neighbor (index k because 0 is self)
-            r_k = dist_i[k]
-
-            # Avoid zero distances
-            if r_k < 1e-10:
-                k += 1
-                continue
-
-            # Volume enclosed by k neighbors
-            V_k = omega_d * (r_k ** d)
-
-            # MLE density at k
-            rho_k = k / V_k if V_k > 0 else 1e10
-            log_rho_k = np.log(max(rho_k, 1e-300))
-
-            # If at k_max, stop
-            if k >= k_max_actual:
-                break
-
-            # Distance to (k+1)-th neighbor
-            r_k1 = dist_i[k + 1]
-            if r_k1 < 1e-10:
-                k += 1
-                continue
-
-            # Volume enclosed by k+1 neighbors
-            V_k1 = omega_d * (r_k1 ** d)
-
-            # MLE density at k+1
-            rho_k1 = (k + 1) / V_k1 if V_k1 > 0 else 1e10
-            log_rho_k1 = np.log(max(rho_k1, 1e-300))
-
-            # Likelihood Ratio Test (Eq. 2 in paper)
-            # Compare: H0 (same density) vs H1 (different density)
-            # D_k = 2 * (L_{k+1}(rho_{k+1}) - L_{k+1}(rho_k))
-
-            # Log-likelihood at k+1 neighbors with density rho_{k+1}
-            L_k1_rho_k1 = (k + 1) * log_rho_k1 - rho_k1 * V_k1
-
-            # Log-likelihood at k+1 neighbors with density rho_k
-            L_k1_rho_k = (k + 1) * log_rho_k - rho_k * V_k1
-
-            D_k = 2 * (L_k1_rho_k1 - L_k1_rho_k)
-
-            # If D_k exceeds threshold, density is no longer constant
-            if D_k >= self.D_thr:
-                break
-
+        D_k = 0.0
+        while k < k_max_actual and D_k <= self.D_thr:
+            vi = get_volume(i, k)
+            j = indices[i][k + 1]
+            vj = get_volume(j, k)
+            if vi > 0 and vj > 0:
+                D_k = -2.0 * k * (np.log(vi) + np.log(vj) - 2.0 * np.log(vi + vj) + np.log(4.0))
             k += 1
 
-        # Use k as optimal k_hat
-        k_hat = k
+        k_hat = k - 1
+        r_k_hat = distances[i][k_hat]
+        V_k_hat = get_volume(i, k_hat)
 
-        # Final density estimate at r=0 (center) with optional α correction
-        r_k_hat = dist_i[k_hat]
-        V_k_hat = omega_d * (r_k_hat ** d)
+        # Plain 1-parameter MLE, used as the starting point for the
+        # Newton-Raphson refinement below (and as the result if the
+        # refinement is disabled or falls back on a degenerate shell).
+        rho_hat = k_hat / V_k_hat if V_k_hat > 0 else 1e10
+        log_rho_simple = np.log(max(rho_hat, 1e-300))
 
-        if self.use_alpha_correction and k_hat >= self.k_min:
-            # 2-parameter model: log(ρ(r)) = log(ρ_0) + α·r
-            # Estimate α using the trend in local density estimates
-            log_rho_hat, alpha = self._estimate_with_alpha_correction(
-                dist_i[:k_hat+1], d, omega_d
-            )
+        if self.use_alpha_correction and k_hat >= 2:
+            log_rho_hat, alpha = self._nrmaxl(log_rho_simple, k_hat, V_dic[i])
         else:
-            # 1-parameter model: constant density
-            rho_hat = k_hat / V_k_hat if V_k_hat > 0 else 1e10
-            log_rho_hat = np.log(max(rho_hat, 1e-300))
-            alpha = 0.0
+            log_rho_hat, alpha = log_rho_simple, 0.0
 
-        # Error estimate from Fisher Information
-        # Var(log(rho_0)) = 4*(k_hat + 2) / ((k_hat - 1) * k_hat)
-        # This is from the 2-parameter Fisher Information matrix inverse
-        # See Supplementary Information Text S1 of the paper
+        # Error estimate from Fisher Information.
+        # Var(log(rho_0)) = (4*k_hat + 2) / (k_hat * (k_hat - 1))
+        # See Supplementary Information Text S1 of the paper; matches
+        # the official reference implementation's err_densities formula.
         if k_hat > 1:
-            variance = 4.0 * (k_hat + 2) / ((k_hat - 1) * k_hat)
+            variance = (4.0 * k_hat + 2.0) / (k_hat * (k_hat - 1))
             epsilon = np.sqrt(variance)
         else:
             epsilon = np.inf  # undefined for k=1
 
         return k_hat, log_rho_hat, epsilon, alpha
 
-    def _estimate_with_alpha_correction(self, distances, d, omega_d):
+    def _nrmaxl(self, rinit, kopt, V_dic_i):
         """
-        Estimate log(ρ_0) and α using the 2-parameter model.
+        Damped, step-clamped 2-parameter Newton-Raphson refinement of the
+        log-density estimate: fits log(ρ) = b + a*(shell index) via the
+        Poisson-process likelihood, matching the official reference
+        implementation's nrmaxl (src/Pipeline/_PAk.pyx).
 
-        The model is: log(ρ(r)) = log(ρ_0) + α·r
-
-        This is solved by fitting the observed cumulative counts
-        to the expected counts under the 2-parameter model.
+        The damping (each step is only 10% of the full Newton step) and
+        the step-size ceiling (never move more than 10% of the initial
+        estimate per iteration) are what keep this well-behaved at small
+        k_hat, where an unregularized fit can diverge to extreme values.
 
         Parameters
         ----------
-        distances : ndarray
-            Distances to k neighbors (including self at index 0).
-        d : float
-            Intrinsic dimension.
-        omega_d : float
-            Volume of unit d-ball.
+        rinit : float
+            Initial log-density estimate (the plain 1-parameter MLE).
+        kopt : int
+            k_hat - number of shells to fit.
+        V_dic_i : dict
+            Cache of point i's cumulative shell volumes, keyed 1..kopt.
 
         Returns
         -------
         log_rho_0 : float
-            Log-density at r=0.
+            Refined log-density at r=0.
         alpha : float
-            Density gradient parameter.
-
-        Notes
-        -----
-        For the 2-parameter model, we use a weighted regression approach.
-        The local density at each shell is estimated and then fitted to
-        the linear model log(ρ(r)) = log(ρ_0) + α·r.
-
-        This is an approximation that works well when the density variation
-        is small within the neighborhood. For strongly varying densities,
-        more sophisticated methods could be used.
+            Fitted gradient parameter (diagnostic only).
         """
-        # Get distances (skip self at index 0)
-        r = distances[1:]  # distances to neighbors 1, 2, ..., k
-        k = len(r)
+        b = rinit
+        a = 0.0
+        stepmax = 0.1 * abs(b)
 
-        if k < 2:
-            # Cannot fit 2 parameters with less than 2 points
-            V = omega_d * (r[-1] ** d) if len(r) > 0 else 1.0
-            rho = k / V if V > 0 else 1e10
-            return np.log(max(rho, 1e-300)), 0.0
+        # Shell (incremental) volumes: vi[0] is the volume of the first
+        # neighbor's ball; vi[j] for j>=1 is the volume of the shell
+        # between the j-th and (j+1)-th neighbors.
+        vi = np.empty(kopt)
+        vi[0] = V_dic_i[1]
+        degenerate = False
+        for j in range(1, kopt):
+            vi[j] = V_dic_i[j + 1] - V_dic_i[j]
+            if vi[j] < 1e-100:
+                degenerate = True
 
-        # Estimate local density at each neighbor shell
-        # ρ_j ≈ j / V_j where V_j = ω_d · r_j^d
-        log_rho_local = np.zeros(k)
-        r_mid = np.zeros(k)
+        if degenerate:
+            # Matches the official kNN fallback: if any shell has ~zero
+            # volume (near-duplicate points), skip the correction.
+            return b, a
 
-        for j in range(k):
-            r_j = r[j]
-            if r_j < 1e-10:
-                log_rho_local[j] = np.nan
-                r_mid[j] = 0
-                continue
+        ga, gb, cov = self._nr_derivatives(a, b, kopt, vi)
+        cov_inv = self._nr_inverse(cov)
+        if cov_inv is None:
+            return b, a
 
-            V_j = omega_d * (r_j ** d)
-            rho_j = (j + 1) / V_j if V_j > 0 else 1e10
-            log_rho_local[j] = np.log(max(rho_j, 1e-300))
-            r_mid[j] = r_j
+        func = 100.0
+        niter = 0
+        fepsilon = np.finfo(float).eps
+        while func > 1e-3 and niter < 1000:
+            sb = cov_inv[0, 0] * gb + cov_inv[0, 1] * ga
+            sa = cov_inv[1, 0] * gb + cov_inv[1, 1] * ga
+            niter += 1
+            sigma = 0.1
+            if abs(sigma * sb) > stepmax:
+                sigma = abs(stepmax / sb) if sb != 0 else sigma
+            b = b - sigma * sb
+            a = a - sigma * sa
+            ga, gb, cov = self._nr_derivatives(a, b, kopt, vi)
+            cov_inv = self._nr_inverse(cov)
+            if cov_inv is None:
+                return b, a
+            if abs(a) <= fepsilon or abs(b) <= fepsilon:
+                func = max(abs(gb), abs(ga))
+            else:
+                func = max(abs(gb / b), abs(ga / a))
 
-        # Remove invalid entries
-        valid = ~np.isnan(log_rho_local) & (r_mid > 0)
-        if np.sum(valid) < 2:
-            # Fall back to 1-parameter estimate
-            V = omega_d * (r[-1] ** d)
-            rho = k / V if V > 0 else 1e10
-            return np.log(max(rho, 1e-300)), 0.0
+        return b, a
 
-        r_valid = r_mid[valid]
-        log_rho_valid = log_rho_local[valid]
+    @staticmethod
+    def _nr_derivatives(a, b, kopt, vi):
+        """Gradient and Fisher-information (Hessian) of the 2-parameter
+        Poisson-process log-likelihood, at shell-count kopt."""
+        gb = float(kopt)
+        ga = (kopt + 1) * kopt / 2.0
+        cov = np.zeros((2, 2))
+        for j in range(kopt):
+            jf = j + 1
+            t = b + a * jf
+            s = np.exp(t) if t < 700 else np.inf
+            tt = vi[j] * s
+            gb -= tt
+            ga -= jf * tt
+            cov[0, 0] -= tt
+            cov[0, 1] -= jf * tt
+            cov[1, 1] -= jf * jf * tt
+        cov[1, 0] = cov[0, 1]
+        return ga, gb, cov
 
-        # Weighted linear regression: log(ρ) = log(ρ_0) + α·r
-        # Weight by 1/variance, which scales roughly as j for each shell
-        weights = np.arange(1, len(r_valid) + 1)
-        weights = weights / np.sum(weights)
-
-        # Weighted least squares
-        r_mean = np.average(r_valid, weights=weights)
-        log_rho_mean = np.average(log_rho_valid, weights=weights)
-
-        # Covariance for slope
-        cov_r_rho = np.sum(weights * (r_valid - r_mean) * (log_rho_valid - log_rho_mean))
-        var_r = np.sum(weights * (r_valid - r_mean) ** 2)
-
-        if var_r > 1e-10:
-            alpha = cov_r_rho / var_r
-            log_rho_0 = log_rho_mean - alpha * r_mean
-        else:
-            alpha = 0.0
-            log_rho_0 = log_rho_mean
-
-        return log_rho_0, alpha
+    @staticmethod
+    def _nr_inverse(cov):
+        """Inverse of the 2x2 covariance matrix, or None if singular."""
+        det = cov[0, 0] * cov[1, 1] - cov[0, 1] * cov[1, 0]
+        if det == 0 or not np.isfinite(det):
+            return None
+        det_inv = 1.0 / det
+        cov_inv = np.array([
+            [det_inv * cov[1, 1], -det_inv * cov[0, 1]],
+            [-det_inv * cov[1, 0], det_inv * cov[0, 0]],
+        ])
+        return cov_inv
 
     def get_g(self):
         """

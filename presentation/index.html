@@ -12,7 +12,42 @@
         .reveal h3 { color: #ff6b6b; }
         .reveal .slides section { text-align: left; }
         .reveal .slides section.center { text-align: center; }
+        /* center:false (global) keeps titles anchored near the top on every
+           slide. These lighter-content slides get nudged down instead with
+           plain padding-top - NOT flexbox: PDF export bakes flex layout into
+           fixed coordinates at generation time, and different PDF renderers
+           (Chromium/PyMuPDF vs. pdf.js in VS Code) were interpreting that
+           output inconsistently, leaving content shifted left in some
+           viewers. padding-top has no such ambiguity.
+           Each slide's content height differs, so true centering needs a
+           per-slide value, not one shared number - each section below sets
+           its own via an inline !important style (measured against this
+           exact deck with Playwright: reveal's print-pdf stylesheet forces
+           padding:0 !important on every section, so a non-important inline
+           padding-top is silently dropped without !important here too).
+           reveal's print controller also assigns each section its own
+           JS-computed `top`, which stacks unpredictably with padding-top -
+           pinned to top:0 below so padding-top is the only thing moving
+           content, measured against the print page's real per-slide box
+           height (791px, not the configured 720px slide height - reveal
+           pads print pages internally). This class rule is just the
+           fallback for any vcenter-slide section that doesn't set its own
+           padding-top inline. */
+        .reveal .slides section.vcenter-slide { padding-top: 100px; }
+        html.print-pdf .reveal .slides section.vcenter-slide,
+        .print-pdf .reveal .slides section.vcenter-slide {
+            top: 0 !important; left: 0 !important;
+        }
+        @media print {
+            .reveal .formula { padding: 8px 15px !important; margin: 8px 0 !important; }
+            .reveal li { margin: 4px 0 !important; }
+            .reveal p { margin: 6px 0 !important; }
+            .reveal h2 { margin-bottom: 4px !important; }
+            .reveal h3 { margin-top: 4px !important; margin-bottom: 8px !important; }
+        }
         .reveal table { font-size: 0.65em; margin: 15px auto; }
+        .reveal table.big { font-size: 1.05em; }
+        .reveal table.big td, .reveal table.big th { padding: 14px 20px; }
         .reveal table th { background: #58a6ff; color: white; }
         .reveal table td, .reveal table th { padding: 8px 12px; border: 1px solid #444; }
         .reveal .highlight { color: #ff6b6b; font-weight: bold; }
@@ -38,7 +73,7 @@
         <div class="slides">
 
             <!-- TITLE SLIDE -->
-            <section class="center title-slide">
+            <section class="center title-slide vcenter-slide" style="padding-top: 157px !important;">
                 <h1>DPA</h1>
                 <h2>Density Peak Advanced Clustering</h2>
                 <p style="margin-top: 40px; color: #888;">
@@ -57,9 +92,9 @@
             </section>
 
             <!-- OUTLINE -->
-            <section>
+            <section class="center">
                 <h2>Outline</h2>
-                <ol>
+                <ol style="text-align: left; max-width: 700px; margin: 0 auto;">
                     <li>Motivation & Problem</li>
                     <li><strong>Understanding the Method</strong>
                         <ul class="small">
@@ -78,7 +113,7 @@
             </section>
 
             <!-- MOTIVATION -->
-            <section>
+            <section style="padding-top: 40px !important;">
                 <h2>The Problem</h2>
                 <h3>Standard Density Peaks (DP) Limitations</h3>
                 <div class="two-cols">
@@ -107,7 +142,7 @@
             </section>
 
             <!-- DPA OVERVIEW -->
-            <section>
+            <section style="padding-top: 40px !important;">
                 <h2>DPA Algorithm Overview</h2>
                 <ol>
                     <li><strong>Estimate intrinsic dimension</strong> d using TWO-NN</li>
@@ -133,38 +168,67 @@
                 <div class="formula">
                     <p><strong>Idea:</strong> For uniform density, the ratio μ = r₂/r₁ follows:</p>
                     <p style="text-align: center; font-size: 1.2em;">
-                        P(μ) = d · μ<sup>d-1</sup>
+                        P(μ) = d · μ<sup>-d-1</sup>
                     </p>
                     <p>where r₁, r₂ are distances to 1st and 2nd nearest neighbors.</p>
                 </div>
-                <p><strong>Why it matters:</strong></p>
-                <ul>
-                    <li>Optdigits: 64 features → d ≈ 8-9</li>
-                    <li>MNIST: 784 features → d ≈ 12-14</li>
+                <p class="small" style="margin-top: 30px;"><strong>Assumes:</strong></p>
+                <ul class="small">
+                    <li>Locally constant density up to the 2nd neighbor</li>
+                    <li>i.i.d. points</li>
                 </ul>
                 <aside class="notes">
                     The first building block of DPA is the TWO-NN estimator for the intrinsic dimension. Real-world datasets are often embedded in a high-dimensional ambient space, but the data actually lives on a much lower-dimensional manifold. For example, MNIST images have 784 pixels, but the manifold of handwritten digits has an intrinsic dimension of roughly 12 to 14. Estimating this intrinsic dimension correctly is crucial because the PAk density estimator uses d in its formula. If we used the ambient dimension, the density estimates would be completely wrong. The TWO-NN method, published by Facco et al. in 2017, uses a remarkably simple idea. For each data point, we compute the ratio mu between the distance to its second nearest neighbor and the distance to its first nearest neighbor. Under the assumption of locally uniform density, this ratio follows a Pareto distribution with shape parameter equal to the intrinsic dimension d. The CDF is F(mu) = 1 minus mu to the power of negative d. So we can estimate d by fitting this distribution to the empirical CDF of all the mu values in the dataset, using a simple linear regression on the log-log scale. This is an elegant result because it only requires the two nearest neighbors of each point, making it very efficient and robust. In practice, we also discard a fraction of points with the largest mu values, because those are points near density boundaries where the uniformity assumption breaks down. In our experiments, Optdigits with 64 ambient features has an intrinsic dimension of about 8 to 9, and MNIST with 784 features has an intrinsic dimension of about 12 to 14.
                 </aside>
             </section>
 
-            <!-- PAk -->
+            <!-- PAk STATISTICAL MODEL -->
             <section>
                 <h2>Understanding the Method</h2>
-                <h3>2. PAk: Adaptive Density Estimation</h3>
-                <p>Finds <span class="highlight">optimal k</span> for each point using Likelihood Ratio Test.</p>
+                <h3>2. PAk: The Statistical Model</h3>
                 <div class="formula">
-                    <p><strong>Test statistic:</strong></p>
+                    <p><strong>Shell volumes:</strong></p>
                     <p style="text-align: center;">
-                        D<sub>k</sub> = 2[L<sub>k+1</sub>(ρ̂<sub>k+1</sub>) - L<sub>k+1</sub>(ρ̂<sub>k</sub>)]
+                        v<sub>i,l</sub> = ω<sub>d</sub> (r<sub>i,l</sub><sup>d</sup> − r<sub>i,l-1</sub><sup>d</sup>)
                     </p>
-                    <p>Stop when D<sub>k</sub> > threshold (density no longer constant)</p>
+                    <p class="small">ω<sub>d</sub> = volume of the unit d-ball; r<sub>i,l</sub> = ordered distances to the neighbors of i; d = intrinsic dimension from TWO-NN</p>
                 </div>
+                <p><strong>Key observation:</strong> if the density is constant, the v<sub>i,l</sub> are i.i.d. exponential with rate ρ.</p>
+                <div class="formula">
+                    <p><strong>Log-likelihood:</strong></p>
+                    <p style="text-align: center;">
+                        L<sub>i,k</sub>(ρ<sub>i</sub>) = k·log ρ<sub>i</sub> − ρ<sub>i</sub> · Σ<sub>l=1</sub><sup>k</sup> v<sub>i,l</sub> = k·log ρ<sub>i</sub> − ρ<sub>i</sub> · V<sub>i,k</sub>
+                    </p>
+                    <p class="small">maximization gives the k-NN estimator; variance decreases as 1/√k</p>
+                </div>
+                <aside class="notes">
+                    Before showing how PAk selects k, here is the underlying statistical model. The k neighbors of a point are modeled as a Poisson process: the log-likelihood is k log rho minus rho times V, where V is the volume enclosed by the k neighbors, omega-d times r to the power d — and this is exactly where the intrinsic dimension estimated by TWO-NN enters the pipeline. The shell volumes between successive neighbors are i.i.d. exponential with rate rho when density is constant — the same exponential-volume argument used to derive the standard k-NN estimator. Note the volumes are measured in the intrinsic dimension d from TWO-NN, not the embedding dimension — this is PAk's key innovation for high-dimensional data. Maximizing this likelihood gives the classical k-NN density estimator rho equals k over V.
+                </aside>
+            </section>
+
+            <!-- PAk OPTIMAL K AND ERROR -->
+            <section>
+                <h2>Understanding the Method</h2>
+                <h3>2. PAk: Optimal k̂ and Error</h3>
+                <p><strong>Likelihood Ratio Test</strong> between two models:</p>
+                <ul>
+                    <li>(1) densities at the point and at its k-th neighbor are the same</li>
+                    <li>(2) the densities are assumed to be different</li>
+                </ul>
+                <div class="formula">
+                    <p><strong>Stopping criterion:</strong></p>
+                    <p style="text-align: center;">
+                        k̂<sub>i</sub> : (D<sub>k</sub> < D<sub>thr</sub> ∀ k ≤ k̂<sub>i</sub>) & (D<sub>k̂<sub>i</sub>+1</sub> ≥ D<sub>thr</sub>)
+                    </p>
+                    <p class="small">D<sub>thr</sub> = 23.928, corresponding to a p-value of 10<sup>-6</sup></p>
+                </div>
+                <p class="small">Systematic correction: log(ρ) replaced by log(ρ) + α·l — α models the linear density trend</p>
                 <p><strong>Error from Fisher Information:</strong></p>
                 <p style="text-align: center; background: rgba(255,107,107,0.1); padding: 15px; border-radius: 10px;">
-                    ε = √(4(k̂+2) / ((k̂-1)·k̂))
+                    ε<sub>i</sub> = √(4(k̂<sub>i</sub>+2) / ((k̂<sub>i</sub>-1)·k̂<sub>i</sub>))
                 </p>
                 <aside class="notes">
-                    The second building block is PAk, which stands for Point Adaptive k-nearest-neighbor density estimator. The standard approach to density estimation in clustering is to use k-NN with a fixed k for all points. But this is problematic: in dense regions, a small k is sufficient and gives a precise estimate; in sparse regions, we need a larger k to get a reliable estimate, but if we use the same large k everywhere, we lose resolution in the dense regions. PAk solves this by choosing k adaptively for each point. The idea is to start from a small k and increase it, testing at each step whether the density is still approximately constant within the k-neighborhood. This is done using a Likelihood Ratio Test. Specifically, the density within a sphere of radius r_k around a point is modeled as a Poisson process with parameter proportional to rho times r_k to the power d. The test statistic D_k compares the log-likelihood of the density estimated using k+1 neighbors against the density estimated using k neighbors. When D_k exceeds a chi-squared threshold with one degree of freedom, it means that the density is no longer constant within the k-neighborhood, so we stop and use k-hat, the last k for which the density was still approximately uniform. A crucial output of PAk is not just the density estimate but also the estimation error. Using Fisher Information theory, the relative error on the log-density is given by epsilon equals the square root of 4 times k-hat plus 2, divided by k-hat minus 1 times k-hat. This error decreases as k-hat increases, which makes intuitive sense: more neighbors means a more precise estimate. These error bounds are essential for the merging step in Heuristic 3, because they allow us to determine whether the difference between two density values is statistically significant.
+                    PAk finds the largest k for which the constant-density hypothesis holds at p-value 10 to the minus 6, then applies the alpha correction for the residual linear trend, and the error comes from the Fisher Information of this model. The standard approach to density estimation in clustering is to use k-NN with a fixed k for all points. But this is problematic: in dense regions, a small k is sufficient and gives a precise estimate; in sparse regions, we need a larger k to get a reliable estimate, but if we use the same large k everywhere, we lose resolution in the dense regions. PAk solves this by choosing k adaptively for each point, testing at each step whether the density is still approximately constant within the k-neighborhood via a Likelihood Ratio Test between the two models above. When the test statistic D_k exceeds the threshold D_thr, it means the density is no longer constant within the k-neighborhood, so we stop and use k-hat, the last k for which the density was still approximately uniform. A crucial output of PAk is not just the density estimate but also the estimation error. Using Fisher Information theory, the relative error on the log-density is given by epsilon equals the square root of 4 times k-hat plus 2, divided by k-hat minus 1 times k-hat. This error decreases as k-hat increases, which makes intuitive sense: more neighbors means a more precise estimate. These error bounds are essential for the merging step in Heuristic 3, because they allow us to determine whether the difference between two density values is statistically significant.
                 </aside>
             </section>
 
@@ -172,7 +236,7 @@
             <section>
                 <h2>Understanding the Method</h2>
                 <h3>3. The Three Heuristics</h3>
-                <table>
+                <table class="big">
                     <tr>
                         <th>Heuristic</th>
                         <th>Purpose</th>
@@ -181,17 +245,25 @@
                     <tr>
                         <td><strong>H1</strong></td>
                         <td>Find cluster centers</td>
-                        <td>δᵢ > r<sub>k̂ᵢ</sub> AND not in higher-g neighborhood</td>
+                        <td style="font-size: 0.85em;">
+                            1. δᵢ &gt; r<sub>k̂ᵢ</sub><br>
+                            2. ∀ j, g<sub>j</sub> &gt; g<sub>i</sub> : i ∉ NN<sub>j</sub> := {k : r<sub>jk</sub> &lt; r<sub>k̂j</sub>}
+                        </td>
                     </tr>
                     <tr>
                         <td><strong>H2</strong></td>
                         <td>Find saddle points</td>
-                        <td>Highest g among border points</td>
+                        <td style="font-size: 0.85em;">
+                            1. j = argmin<sub>k∈c'</sub> r<sub>ik</sub>, with r<sub>ij</sub> &lt; r<sub>k̂ᵢ</sub><br>
+                            2. i = argmin<sub>k∈c</sub> r<sub>jk</sub>
+                        </td>
                     </tr>
                     <tr>
                         <td><strong>H3</strong></td>
                         <td>Merge peaks</td>
-                        <td>Z-test on peak height vs saddle</td>
+                        <td>Z-test on peak vs saddle
+                            
+                        </td>
                     </tr>
                 </table>
                 <p style="margin-top: 20px;">
@@ -202,6 +274,7 @@
                 </aside>
             </section>
 
+
             <!-- Z PARAMETER -->
             <section>
                 <h2>Hyperparameters</h2>
@@ -209,8 +282,9 @@
                 <div class="formula">
                     <p><strong>Merge criterion (Heuristic 3):</strong></p>
                     <p style="text-align: center; font-size: 1.1em;">
-                        log(ρ<sub>peak</sub>) - log(ρ<sub>saddle</sub>) < Z · √(ε²<sub>peak</sub> + ε²<sub>saddle</sub>)
+                        log(ρ<sub>c</sub>) - log(ρ<sub>cc'</sub>) < Z · (ε<sub>c</sub> + ε<sub>cc'</sub>)
                     </p>
+                    <p class="small">ρ<sub>c</sub> = density of the center of cluster c; ρ<sub>cc'</sub> = density of the saddle between c and c'</p>
                 </div>
                 <table>
                     <tr>
@@ -235,71 +309,7 @@
                 </aside>
             </section>
 
-            <!-- Z SENSITIVITY -->
-            <section>
-                <h2>Hyperparameters</h2>
-                <h3>Z Sensitivity on Real Data</h3>
-                <p><strong>Optdigits</strong> (1797 samples, d=9, 10 true classes):</p>
-                <table>
-                    <tr>
-                        <th>Z</th>
-                        <td>1.0</td>
-                        <td>1.5</td>
-                        <td>2.0</td>
-                        <td>2.5</td>
-                        <td>3.0</td>
-                    </tr>
-                    <tr>
-                        <th>Clusters</th>
-                        <td><strong>11</strong></td>
-                        <td>9</td>
-                        <td>9</td>
-                        <td>8</td>
-                        <td>7</td>
-                    </tr>
-                    <tr>
-                        <th>NMI</th>
-                        <td><strong>0.736</strong></td>
-                        <td>0.650</td>
-                        <td>0.650</td>
-                        <td>0.493</td>
-                        <td>0.474</td>
-                    </tr>
-                </table>
-                <p style="margin-top: 15px;"><strong>Pendigits</strong> (10992 samples, d=6, 10 true classes):</p>
-                <table>
-                    <tr>
-                        <th>Z</th>
-                        <td>1.0</td>
-                        <td>1.5</td>
-                        <td>2.0</td>
-                        <td>2.5</td>
-                        <td>3.0</td>
-                    </tr>
-                    <tr>
-                        <th>Clusters</th>
-                        <td>34</td>
-                        <td>32</td>
-                        <td>25</td>
-                        <td>22</td>
-                        <td>22</td>
-                    </tr>
-                    <tr>
-                        <th>NMI</th>
-                        <td>0.768</td>
-                        <td>0.771</td>
-                        <td><strong>0.784</strong></td>
-                        <td>0.781</td>
-                        <td>0.781</td>
-                    </tr>
-                </table>
-                <p style="margin-top: 10px; font-size: 0.8em;">
-                    DPA finds <span class="highlight">more clusters than ground truth</span> (sub-structure within digit classes)
-                </p>
-                <aside class="notes">
-                    This slide shows how the Z parameter affects the clustering results on two real datasets. On Optdigits, which has 1797 samples and an estimated intrinsic dimension of 9, we see that at Z equals 1 we get 11 clusters with the best NMI of 0.736. As we increase Z, the number of clusters decreases because more peaks get merged together: at Z equals 3, we only get 7 clusters. The NMI also drops because merging too aggressively combines distinct digit classes. On Pendigits, which is a larger dataset with about 11,000 samples and intrinsic dimension 6, the behavior is more stable. The NMI is relatively flat between 0.768 and 0.784 across all Z values, with the best at Z equals 2. The number of clusters ranges from 34 at Z equals 1 down to 22 at Z equals 3. An important observation is that DPA consistently finds more clusters than the 10 ground-truth classes. This is not a bug but a feature of the algorithm. DPA discovers sub-structure within the digit classes. For example, the digit 1 can be written in different styles: some people write it as a straight vertical line, others with a serif or a slanted stroke. These are genuine density peaks in the data that DPA correctly identifies. The ground truth labels do not capture this intra-class variability, so metrics like ARI and NMI penalize the algorithm even though it is finding real structure.
-                </aside>
-            </section>
+           
 
             <!-- LIMITATIONS -->
             <section>
@@ -312,8 +322,6 @@
                                 PAk estimation degrades</li>
                             <li><strong>Computation:</strong><br>
                                 O(N × k<sub>max</sub> × log N)</li>
-                            <li><strong>Image data:</strong><br>
-                                Needs Tangent Distance</li>
                             <li><strong>Uniform density:</strong><br>
                                 No natural peaks</li>
                         </ul>
@@ -323,7 +331,6 @@
                         <ul>
                             <li>Use lower Z for high-D</li>
                             <li>FAISS for fast k-NN</li>
-                            <li>Tangent Distance built-in</li>
                             <li>Check decision graph</li>
                         </ul>
                     </div>
@@ -333,201 +340,27 @@
                 </aside>
             </section>
 
-            <!-- COMPARISON TABLE -->
+            
+
+            <!-- SPIR2 TOPOGRAPHY AT DIFFERENT Z -->
             <section class="center">
-                <h2>Method Comparison</h2>
-                <table style="font-size: 0.55em;">
-                    <tr>
-                        <th>Criterion</th>
-                        <th>DPA</th>
-                        <th>DP</th>
-                        <th>DBSCAN</th>
-                        <th>Spectral</th>
-                        <th>GMM</th>
-                    </tr>
-                    <tr>
-                        <td><strong>Auto k</strong></td>
-                        <td class="pros">Yes (Z-test)</td>
-                        <td class="cons">No (manual)</td>
-                        <td>Unreliable</td>
-                        <td class="cons">No</td>
-                        <td>BIC</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Parameters</strong></td>
-                        <td class="pros">Z only</td>
-                        <td>k, threshold</td>
-                        <td>eps, min_pts</td>
-                        <td>k</td>
-                        <td>k, cov</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Non-convex</strong></td>
-                        <td class="pros">Yes</td>
-                        <td class="pros">Yes</td>
-                        <td class="pros">Yes</td>
-                        <td class="pros">Yes</td>
-                        <td class="cons">No</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Error bounds</strong></td>
-                        <td class="pros">Fisher Info</td>
-                        <td class="cons">None</td>
-                        <td class="cons">None</td>
-                        <td class="cons">None</td>
-                        <td class="cons">None</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Topography</strong></td>
-                        <td class="pros">Yes</td>
-                        <td class="cons">No</td>
-                        <td class="cons">No</td>
-                        <td class="cons">No</td>
-                        <td class="cons">No</td>
-                    </tr>
-                </table>
+                <h2>SPIR2 - DPA topography</h2>
+                <img src="../plots/z_sweep_spir2.png" alt="SPIR2 Topography at Different Z" style="max-height: 580px; max-width: 95%;">
                 <aside class="notes">
-                    This table provides a qualitative comparison of DPA against four other popular clustering algorithms. Starting with automatic cluster detection: DPA automatically determines the number of clusters through the Z-test merging procedure. The original Density Peaks requires the user to manually select centers from the decision graph, which is subjective and not reproducible. DBSCAN technically finds the number of clusters automatically, but in practice the result is highly sensitive to the epsilon parameter, especially in high dimensions, making it unreliable. Spectral Clustering and GMM both require the number of clusters k to be specified in advance. GMM can use the Bayesian Information Criterion to select k, but this adds another layer of model selection. In terms of parameters, DPA has only Z. DP needs k for density estimation and a threshold for center selection. DBSCAN needs epsilon and min-points. Spectral needs k. GMM needs k and a choice of covariance structure. Regarding non-convex cluster shapes, DPA, DP, DBSCAN, and Spectral can all handle them because they are based on density or graph connectivity rather than centroids. GMM assumes Gaussian-shaped clusters, so it cannot naturally handle non-convex shapes. A unique advantage of DPA is error quantification through Fisher Information. No other method in this comparison provides rigorous statistical bounds on its density estimates. Finally, DPA is the only method that produces a topographic analysis of the data, including a dendrogram that shows how clusters relate to each other through saddle points and at what significance level they merge.
+                    This is the exact SPIR2 dataset from the paper's Figure 3 — 38,358 points, two interleaving spirals with background noise. At Z=1 we see 34 fine-grained sub-clusters along the arms. At Z=2, 5 clusters — intermediate structure. At Z=3, exactly 2 clusters — the two ground-truth spirals — with NMI 0.709. This directly replicates the paper's demonstration that Z acts as a resolution parameter, converging to the correct number of clusters as statistical confidence increases.
                 </aside>
             </section>
 
-            <!-- NUMERICAL RESULTS -->
-            <section>
-                <h2>Numerical Results</h2>
-                <table style="font-size: 0.55em;">
-                    <tr>
-                        <th>Dataset</th>
-                        <th>Metric</th>
-                        <th>DPA</th>
-                        <th>DP</th>
-                        <th>DBSCAN</th>
-                        <th>Spectral*</th>
-                        <th>GMM*</th>
-                    </tr>
-                    <tr>
-                        <td rowspan="3"><strong>Optdigits</strong><br><span class="small">(1797, d=9)</span></td>
-                        <td>NMI</td>
-                        <td>0.736</td>
-                        <td><strong>0.805</strong></td>
-                        <td>0.591</td>
-                        <td>0.789</td>
-                        <td>0.397</td>
-                    </tr>
-                    <tr>
-                        <td>ARI</td>
-                        <td>0.505</td>
-                        <td><strong>0.685</strong></td>
-                        <td>0.248</td>
-                        <td>0.674</td>
-                        <td>0.190</td>
-                    </tr>
-                    <tr>
-                        <td>k</td>
-                        <td>11</td>
-                        <td>17</td>
-                        <td>26</td>
-                        <td>10</td>
-                        <td>10</td>
-                    </tr>
-                    <tr>
-                        <td rowspan="3"><strong>Pendigits</strong><br><span class="small">(10992, d=6)</span></td>
-                        <td>NMI</td>
-                        <td>0.781</td>
-                        <td>0.748</td>
-                        <td>0.706</td>
-                        <td><strong>0.820</strong></td>
-                        <td>0.593</td>
-                    </tr>
-                    <tr>
-                        <td>ARI</td>
-                        <td>0.657</td>
-                        <td>0.492</td>
-                        <td>0.549</td>
-                        <td><strong>0.680</strong></td>
-                        <td>0.432</td>
-                    </tr>
-                    <tr>
-                        <td>k</td>
-                        <td>20</td>
-                        <td>54</td>
-                        <td>56</td>
-                        <td>10</td>
-                        <td>10</td>
-                    </tr>
-                    <tr>
-                        <td rowspan="3"><strong>MNIST 10k</strong><br><span class="small">(10000, d=14)</span></td>
-                        <td>NMI</td>
-                        <td>0.664†</td>
-                        <td>0.463</td>
-                        <td>0.231</td>
-                        <td><strong>0.641</strong></td>
-                        <td>0.315</td>
-                    </tr>
-                    <tr>
-                        <td>ARI</td>
-                        <td><strong>0.438</strong>†</td>
-                        <td>0.228</td>
-                        <td>0.042</td>
-                        <td>0.461</td>
-                        <td>0.114</td>
-                    </tr>
-                    <tr>
-                        <td>k</td>
-                        <td>28†</td>
-                        <td>50</td>
-                        <td>19</td>
-                        <td>10</td>
-                        <td>10</td>
-                    </tr>
-                </table>
-                <p class="small" style="margin-top: 10px;">
-                    *Spectral/GMM receive true k=10 as input. DPA, DP, DBSCAN find k automatically.<br>
-                    †DPA+TD (with Tangent Distance)
-                </p>
-                <aside class="notes">
-                    This table shows the quantitative comparison across three datasets using NMI, ARI, and the number of clusters found. It is important to note that the comparison is not entirely fair: Spectral Clustering and GMM receive the true number of clusters k equals 10 as input, which is a significant advantage. DPA, DP, and DBSCAN must discover k on their own. Starting with Optdigits, which has 1797 samples of 8 by 8 handwritten digit images with an intrinsic dimension of 9. On this dataset, the standard Density Peaks algorithm achieves the best results with NMI 0.805 and ARI 0.685, finding 17 clusters. DPA gets NMI 0.736 and ARI 0.505 with 11 clusters. Spectral performs very well too with NMI 0.789, benefiting from knowing the true k. DBSCAN and GMM perform poorly. DP outperforms DPA here partly because Optdigits is a relatively small, well-separated dataset where the manual decision graph actually works well, and DP's 17 clusters happen to align better with the sub-structure. On Pendigits, which is a larger dataset with about 11,000 samples and intrinsic dimension 6, Spectral leads with NMI 0.820 and ARI 0.680, but remember it receives k equals 10. DPA achieves a strong NMI of 0.781 and ARI of 0.657 with 20 clusters, outperforming DP which gets NMI 0.748 and ARI 0.492 with 54 clusters. DP finds too many clusters here because it cannot merge, while DPA's merging procedure consolidates the peaks more effectively. DBSCAN finds 56 clusters with moderate performance. On MNIST 10k, which is the most challenging dataset with 784 features and intrinsic dimension 14, we use DPA with Tangent Distance, marked with a dagger. DPA plus TD achieves the best NMI of 0.664 and competitive ARI of 0.438 with 28 clusters. Spectral gets ARI 0.461 with its known k equals 10. Standard DP gets NMI 0.463, and DBSCAN essentially fails with ARI 0.042 because in 784 dimensions, almost all points are classified as noise. GMM also struggles with NMI 0.315. The paper reports NMI of 0.84 on the full MNIST 60k dataset with Tangent Distance, which we cannot reproduce here because we use only a 10k subset and our implementation may differ in some details.
-                </aside>
-            </section>
-
-            <!-- RESULTS OPTDIGITS -->
+            <!-- SPIR2: DPA VS DP -->
             <section class="center">
-                <h2>Results: Optdigits</h2>
-                <img src="../plots/comparison_optdigits.png" alt="Comparison Optdigits" style="max-height: 580px; max-width: 95%;">
+                <h2> DPA vs DP</h2>
+                <img src="../plots/spir2_dpa_vs_dp_comparison.png" alt="DPA vs DP: The Value of Statistical Merging" style="max-height: 580px; max-width: 95%;">
                 <aside class="notes">
-                    Here we see the visual comparison on Optdigits, projected to 2D via PCA for visualization purposes only. The top-left panel shows the ground truth with the 10 digit classes. Each subsequent panel shows the clustering output of one method. Looking at DPA, we can see that it identifies 11 clusters that broadly correspond to the digit classes, though some classes are split. DP finds 17 clusters, which is more fragmented but each fragment tends to be pure, which explains its higher NMI. DBSCAN finds 26 clusters with many small, scattered groups, and several gray points which are noise points that DBSCAN could not assign to any cluster. Spectral Clustering, with the true k equals 10, produces a clean partition that closely matches the ground truth. GMM with k equals 10 performs the worst visually, assigning points in ways that clearly do not follow the natural cluster boundaries, because GMM assumes Gaussian-shaped clusters which is a poor assumption for digit data in the PCA-projected space.
+                    This comparison on the same official dataset shows why Heuristic 3 is essential. The original DP algorithm, even with careful manual threshold tuning, fragments into 7 clusters with NMI only 0.273 and no principled noise rejection — every small density fluctuation becomes a cluster. DPA at Z=3 correctly recovers the 2 ground-truth spiral arms, with ARI 0.736 and NMI 0.709, and 25% of points correctly flagged as halo — low-confidence points in the noisy background. This is the clearest demonstration in my project of what automatic statistical merging adds over the original 2014 method.
                 </aside>
             </section>
 
-            <!-- RESULTS PENDIGITS -->
-            <section class="center">
-                <h2>Results: Pendigits</h2>
-                <img src="../plots/comparison_pendigits.png" alt="Comparison Pendigits" style="max-height: 580px; max-width: 95%;">
-                <aside class="notes">
-                    On Pendigits we see a different picture. This dataset has about 11,000 samples with 16 features, so the intrinsic dimension is lower at 6, and the clusters are generally better separated. DPA produces 20 clusters that capture the main structure well. Notice how DPA splits some digit classes into sub-clusters, reflecting genuine variability in handwriting style. DP produces 54 clusters, which is excessive fragmentation. Without a merging step, DP detects every small density fluctuation as a separate cluster. This is precisely the problem that DPA's Heuristic 3 was designed to solve. DBSCAN similarly produces 56 clusters with many noise points. Spectral Clustering gives the cleanest result with its known k equals 10, and GMM performs moderately. This dataset illustrates well the advantage of DPA over DP: the merging procedure consolidates spurious peaks while preserving the meaningful ones, resulting in far fewer but more meaningful clusters.
-                </aside>
-            </section>
-
-            <!-- RESULTS MNIST -->
-            <section class="center">
-                <h2>Results: MNIST</h2>
-                <img src="../plots/comparison_mnist.png" alt="Comparison MNIST" style="max-height: 580px; max-width: 95%;">
-                <aside class="notes">
-                    MNIST is the most challenging dataset in our comparison. It has 10,000 samples with 784 features, each being a 28 by 28 grayscale image of a handwritten digit. The intrinsic dimension is estimated at 14, which is in the range where PAk estimation starts to degrade. A crucial point here is the choice of distance metric. Standard Euclidean distance in pixel space is a poor metric for images because a small translation of one pixel shifts all 784 values, creating a large Euclidean distance even though the image is visually identical. This is why the paper recommends using Tangent Distance for image data. Tangent Distance, introduced by Simard, Le Cun, and Denker in 1993, measures the distance between two images after accounting for small geometric transformations such as horizontal and vertical translations, rotation, scaling, and line thickness changes. For each image, we compute tangent vectors that represent the directions in pixel space corresponding to these transformations. The one-sided tangent distance from image A to image B is then the minimum Euclidean distance from B to the tangent plane of A. In our implementation, we use a k-NN hybrid approach: first, we find the 300 nearest neighbors using fast Euclidean distance, then we recompute the distances for these candidates using Tangent Distance, and finally we keep the 100 nearest neighbors by TD. This hybrid approach is both faster than computing the full N-by-N Tangent Distance matrix and gives better clustering results, because the Euclidean pre-filtering acts as a locality prior that prevents spurious connections between distant images that happen to have small tangent distance. Looking at the results, DPA with Tangent Distance finds 28 clusters and achieves the best NMI of 0.664, outperforming all other methods. Standard DP finds 50 clusters with much lower NMI. DBSCAN essentially fails on this dataset: the gray points in the plot are noise points, and in 784 dimensions almost all points are classified as noise because the epsilon ball around each point is nearly empty due to the curse of dimensionality. Spectral with k equals 10 achieves ARI 0.461 but lower NMI than DPA. GMM also struggles significantly.
-                </aside>
-            </section>
-
-            <!-- DPA TOPOGRAPHY -->
-            <section class="center">
-                <h2>DPA Topography</h2>
-                <div class="img-row">
-                    <img src="../plots/pendigits_decision_graph.png" alt="Decision Graph" style="max-height: 420px; max-width: 45%;">
-                    <img src="../plots/pendigits_dendrogram.png" alt="Dendrogram" style="max-height: 420px; max-width: 45%;">
-                </div>
-                <aside class="notes">
-                    One of the unique features of DPA compared to other clustering algorithms is its topographic analysis. Here we see two diagnostic plots for the Pendigits dataset. On the left is the decision graph, which is analogous to the one used in the original Density Peaks algorithm. Each point is plotted with its log-density rho on the x-axis and its delta, the distance to the nearest denser point, on the y-axis. Cluster centers are the points in the upper-right region of this plot: they have high density and high delta, meaning they are isolated density peaks. Points that are colored are identified as cluster centers by Heuristic 1. The remaining points, shown in gray, are non-centers that will be assigned to the nearest center by following the density gradient. Unlike the original DP where the user had to manually draw a threshold line on this graph, DPA's Heuristic 1 automatically selects the centers using the geometric criterion we discussed earlier. On the right is the dendrogram, which is unique to DPA and is not available in any of the other algorithms we compared. The dendrogram shows the hierarchical relationship between clusters. Each leaf at the bottom represents a final cluster. The height at which two clusters are connected represents the density of their saddle point: a high connection means the two clusters are separated by a deep valley in the density landscape, while a low connection means they are only weakly separated. The dashed horizontal lines indicate the saddle densities at which merging decisions were made by Heuristic 3. This visualization is extremely valuable for data interpretation because it reveals how the data is organized at multiple scales: which clusters are closely related and which are clearly distinct. For example, you might see that two clusters corresponding to similar digit shapes, like 3 and 8, are connected at a higher saddle density than two very different digits, like 1 and 0.
-                </aside>
-            </section>
-
+            
             <!-- CONCLUSIONS -->
             <section class="center">
                 <h2>Conclusions</h2>
@@ -543,7 +376,7 @@
             </section>
 
             <!-- THANK YOU -->
-            <section class="center">
+            <section class="center vcenter-slide" style="padding-top: 212px !important;">
                 <h1>Thank You!</h1>
                 <p style="margin-top: 40px;">
                     <strong>Questions?</strong>
@@ -572,7 +405,7 @@
             margin: 0.1,
             minScale: 0.2,
             maxScale: 2.0,
-            center: true,
+            center: false,
             plugins: [ RevealMath.KaTeX, RevealNotes ]
         });
     </script>

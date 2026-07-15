@@ -41,6 +41,8 @@ from .datasets import (
     load_optdigits,
     load_pendigits,
     load_mnist_subset,
+    generate_spir2,
+    load_spir2,
     get_dataset,
     AVAILABLE_DATASETS
 )
@@ -69,6 +71,8 @@ __all__ = [
     'load_optdigits',
     'load_pendigits',
     'load_mnist_subset',
+    'generate_spir2',
+    'load_spir2',
     'get_dataset',
     'AVAILABLE_DATASETS'
 ]

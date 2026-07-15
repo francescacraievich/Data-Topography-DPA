@@ -37,7 +37,6 @@ setup(
         "scipy>=1.7.0",
         "scikit-learn>=1.0.0",
         "matplotlib>=3.4.0",
-        "networkx>=2.6.0",
         "seaborn>=0.11.0",
     ],
     extras_require={

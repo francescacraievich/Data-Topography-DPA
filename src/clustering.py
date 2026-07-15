@@ -321,6 +321,10 @@ def merge_insignificant_peaks(centers, saddles, log_density, epsilon, Z):
     From the paper: "A cluster c is merged with a neighbouring cluster c' if:
       (log rho_c - log rho_{cc'}) < Z * (e_c + e_{cc'})
     where rho_c is the density of the center of cluster c."
+    This is tested for BOTH clusters in the pair independently (c and c'),
+    and the pair is merged if EITHER test fails - matching the official
+    reference implementation (src/Pipeline/_DPA.pyx, get_borders), not
+    just whichever of the two has the lower peak.
 
     The paper specifies iterative merging: "Heuristic 3 is checked for all
     clusters c and c' in order of decreasing log rho_{cc'}." At each step,
@@ -386,22 +390,25 @@ def merge_insignificant_peaks(centers, saddles, log_density, epsilon, Z):
 
                 border_e = rho_bord_err[c][cp]
 
-                # Test lower peak (paper Heuristic 3)
+                # Test EACH peak independently and merge if EITHER is not
+                # significantly higher than the saddle (matches the official
+                # reference implementation, src/Pipeline/_DPA.pyx get_borders:
+                # `if a1<e1 or a2<e2`) - not just the lower of the two peaks.
                 peak_c = log_density[centers[c]]
                 peak_cp = log_density[centers[cp]]
-                if peak_c <= peak_cp:
-                    lower, higher = c, cp
-                else:
-                    lower, higher = cp, c
+                a1 = peak_c - border_d
+                a2 = peak_cp - border_d
+                e1 = Z * (epsilon[centers[c]] + border_e)
+                e2 = Z * (epsilon[centers[cp]] + border_e)
 
-                peak_d = log_density[centers[lower]]
-                peak_e = epsilon[centers[lower]]
-                height = peak_d - border_d
-                threshold = Z * (peak_e + border_e)
-
-                if height < threshold:
+                if a1 < e1 or a2 < e2:
                     if border_d > best_border:
                         best_border = border_d
+                        # Merge the lower-density peak into the higher one.
+                        if peak_c < peak_cp:
+                            lower, higher = c, cp
+                        else:
+                            lower, higher = cp, c
                         best_pair = (lower, higher)
 
         if best_pair is None:
@@ -635,10 +642,14 @@ class DensityPeaks:
         # (simpler than DPA's PAk estimator)
         self.rho_ = 1.0 / (np.mean(distances[:, 1:self.k+1], axis=1) + 1e-10)
 
-        # Step 2: Compute delta (distance to nearest higher-density point)
-        # Vectorized: compute full pairwise distance matrix once
+        # Step 2: Compute delta (distance to nearest higher-density point).
+        # Row-by-row against only the higher-density subset (matching the
+        # official reference implementation, DP/DP.py get_decision_graph,
+        # which uses scipy.spatial.distance.cdist per point) rather than
+        # materializing the full N x N matrix - at N~38k (e.g. the spir2
+        # dataset) a dense float64 matrix is ~11GB and doesn't fit in
+        # memory, regardless of how few features X has.
         from sklearn.metrics import pairwise_distances
-        dist_matrix = pairwise_distances(X, metric=self.metric)
 
         self.delta_ = np.full(n_samples, np.inf)
         nearest_higher = np.full(n_samples, -1, dtype=int)
@@ -651,14 +662,16 @@ class DensityPeaks:
             idx = rho_order[i]
             # All points processed before this one have higher density
             higher_points = rho_order[:i]
-            dists_to_higher = dist_matrix[idx, higher_points]
+            dists_to_higher = pairwise_distances(
+                X[idx:idx + 1], X[higher_points], metric=self.metric)[0]
             min_pos = np.argmin(dists_to_higher)
             self.delta_[idx] = dists_to_higher[min_pos]
             nearest_higher[idx] = higher_points[min_pos]
 
         # Highest density point: delta = max distance to any point
         top_idx = rho_order[0]
-        self.delta_[top_idx] = np.max(dist_matrix[top_idx])
+        dists_from_top = pairwise_distances(X[top_idx:top_idx + 1], X, metric=self.metric)[0]
+        self.delta_[top_idx] = np.max(dists_from_top)
         nearest_higher[top_idx] = top_idx
 
         # Step 3: Compute gamma = rho * delta (decision graph score)

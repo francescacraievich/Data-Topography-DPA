@@ -69,7 +69,7 @@ class TestPAk:
         assert pak.k_hat_ is not None
         assert len(pak.k_hat_) == len(X)
         # k_hat should be within valid range
-        assert np.all(pak.k_hat_ >= 4), "k_hat should be >= k_min=4"
+        assert np.all(pak.k_hat_ >= 3), "k_hat should be >= k_min=3"
         assert np.all(pak.k_hat_ <= 50), "k_hat should be <= k_max"
 
     def test_epsilon_positive(self, optdigits_subset):
@@ -151,10 +151,12 @@ class TestPAkFisherInformation:
         pak.fit(X)
 
         # Manually compute expected epsilon using Fisher Information formula
+        # (matches the official reference implementation's err_densities:
+        # sqrt((4*k_hat+2) / (k_hat*(k_hat-1))))
         for i in range(len(X)):
             k = pak.k_hat_[i]
             if k > 1:
-                expected_eps = np.sqrt(4.0 * (k + 2) / ((k - 1) * k))
+                expected_eps = np.sqrt((4.0 * k + 2.0) / (k * (k - 1)))
                 np.testing.assert_almost_equal(
                     pak.epsilon_[i], expected_eps, decimal=5,
                     err_msg=f"Epsilon mismatch at point {i}"
@@ -162,12 +164,12 @@ class TestPAkFisherInformation:
 
     def test_larger_k_smaller_epsilon(self):
         """Larger k should generally lead to smaller epsilon (formula test)."""
-        # epsilon = sqrt(4*(k+2) / ((k-1)*k))
+        # epsilon = sqrt((4*k+2) / (k*(k-1)))
         # As k increases, epsilon decreases
         # This is a pure formula test, no data needed
 
         ks = [10, 20, 50, 100]
-        epsilons = [np.sqrt(4.0 * (k + 2) / ((k - 1) * k)) for k in ks]
+        epsilons = [np.sqrt((4.0 * k + 2.0) / (k * (k - 1))) for k in ks]
 
         for i in range(len(ks) - 1):
             assert epsilons[i] > epsilons[i+1], \

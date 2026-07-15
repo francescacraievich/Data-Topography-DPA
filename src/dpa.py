@@ -379,7 +379,10 @@ class DPA(BaseEstimator, ClusterMixin):
         Parameters
         ----------
         kind : str, default='dendrogram'
-            Type of plot: 'dendrogram', 'network', 'matrix', or 'decision'.
+            Type of plot: 'dendrogram', 'network', 'matrix', 'decision', or
+            'confusion'. 'dendrogram' and 'network' accept optional
+            ground_truth/digit_colors kwargs for majority-rule coloring.
+            'confusion' requires a ground_truth kwarg.
 
         ax : matplotlib.axes.Axes, optional
             Axes to plot on.
@@ -405,6 +408,10 @@ class DPA(BaseEstimator, ClusterMixin):
             return self.topography_.plot_decision_graph(
                 self.g_, self._delta, ax=ax, centers=self.cluster_centers_, **kwargs
             )
+        elif kind == 'confusion':
+            if 'ground_truth' not in kwargs:
+                raise ValueError("kind='confusion' requires a ground_truth kwarg")
+            return self.topography_.plot_confusion_matrix(ax=ax, **kwargs)
         else:
             raise ValueError(f"Unknown plot kind: {kind}. "
                              "Use 'dendrogram', 'network', 'matrix', or 'decision'.")

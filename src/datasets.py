@@ -15,6 +15,8 @@ Reference datasets from d'Errico et al. (2021):
 - MNIST: 70000 samples, 784 features, 10 classes
 """
 
+import os
+
 import numpy as np
 from sklearn.datasets import load_digits, fetch_openml
 from sklearn.preprocessing import StandardScaler
@@ -192,6 +194,138 @@ def load_mnist_subset(n_samples=5000, normalize=True, return_X_y=False, random_s
         'images': X.reshape(-1, 28, 28),
         'image_shape': (28, 28),
         'n_classes': 10,
+        'n_samples': len(X),
+        'n_features': X.shape[1],
+        'description': description
+    }
+
+
+def generate_spir2(n_samples=20000, noise=0.0, random_state=42):
+    """
+    Generate the SPIR2 two-spirals toy dataset (paper Fig. 3 style).
+
+    Two interleaving Archimedean spirals (r = a + b*theta), offset by pi
+    from each other, with Gaussian noise added perpendicular to each arm
+    (not radially, so the noise doesn't blur the spiral's angular
+    structure). Each arm is one ground-truth cluster. The exact SPIR2
+    generating density from the paper isn't published, so this is a
+    close visual reconstruction: two clearly non-convex, interleaved
+    arms that k-means and other centroid-based methods cannot separate,
+    but that a density-based method like DPA can.
+
+    Parameters
+    ----------
+    n_samples : int, default=20000
+        Total number of points (split evenly between the two arms).
+    noise : float, default=0.0
+        Standard deviation of the Gaussian noise added perpendicular to
+        each spiral arm. The paper-like look uses noise in [0.3, 0.5].
+    random_state : int, default=42
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    X : ndarray of shape (n_samples, 2)
+    y : ndarray of shape (n_samples,)
+        Ground-truth arm label, 0 or 1.
+
+    Examples
+    --------
+    >>> from src.datasets import generate_spir2
+    >>> X, y = generate_spir2(n_samples=20000, noise=0.35)
+    """
+    rng = np.random.RandomState(random_state)
+    n_arm0 = n_samples // 2
+    n_arm1 = n_samples - n_arm0
+
+    a, b = 0.3, 0.4
+    theta_max = 3.0 * np.pi
+
+    def make_arm(n, theta_offset):
+        theta = np.sort(rng.uniform(0.0, theta_max, size=n))
+        r = a + b * theta
+        x = r * np.cos(theta + theta_offset)
+        y_ = r * np.sin(theta + theta_offset)
+
+        # Noise perpendicular to the arm's tangent direction, so it
+        # thickens the arm without smearing points along its length.
+        tangent_angle = theta + theta_offset + np.pi / 2.0
+        perp = rng.normal(0.0, noise, size=n)
+        x = x + perp * np.cos(tangent_angle)
+        y_ = y_ + perp * np.sin(tangent_angle)
+        return np.column_stack([x, y_])
+
+    arm0 = make_arm(n_arm0, 0.0)
+    arm1 = make_arm(n_arm1, np.pi)
+
+    X = np.vstack([arm0, arm1])
+    y = np.concatenate([np.zeros(n_arm0, dtype=int), np.ones(n_arm1, dtype=int)])
+
+    perm = rng.permutation(len(X))
+    return X[perm], y[perm]
+
+
+def load_spir2(return_X_y=False):
+    """
+    Load the official SPIR2 two-spirals dataset used in the paper's
+    Fig. 3 (d'Errico et al., 2021).
+
+    Sourced from the official DADApy repository
+    (github.com/sissa-data-science/DADApy,
+    examples/datasets/Fig2.dat + gt_F2.txt), which is the direct
+    successor library to the DPA code from the same research group.
+    Identified by cross-referencing the paper's Table 1 dataset
+    ordering (CLUS8=Fig.1, SPIR2=Fig.3, AGGR/SPIR3/HORSE=Figs. S2-S4)
+    against DADApy's own example notebook, which loads
+    'datasets/Fig1.dat' and 'datasets/Fig2.dat' as alternatives for the
+    same clustering demo - Fig1.dat is CLUS8, so Fig2.dat is SPIR2.
+
+    38358 points in [-1, 1]^2: two interleaving spiral arms (labels 0
+    and 1, ~16500 points each) plus uniform background noise (label -1,
+    ~5350 points, matching the paper's use of 'halo'/noise points to
+    validate DPA's halo mechanism).
+
+    Falls back to generate_spir2() (a synthetic approximation) if the
+    local data/spir2.csv file is not present.
+
+    Parameters
+    ----------
+    return_X_y : bool, default=False
+        If True, return (X, y) tuple instead of dict.
+
+    Returns
+    -------
+    dict or tuple
+        Dataset dict (keys: 'data', 'target', ...) or (X, y) tuple.
+        y == -1 marks ground-truth background noise points.
+
+    Examples
+    --------
+    >>> from src.datasets import load_spir2
+    >>> X, y = load_spir2(return_X_y=True)
+    """
+    data_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        'data', 'spir2.csv'
+    )
+
+    if os.path.exists(data_path):
+        raw = np.genfromtxt(data_path, delimiter=',', skip_header=1)
+        X = raw[:, :2]
+        y = raw[:, 2].astype(int)
+        description = ('SPIR2 (official, paper Fig. 3): two spirals + background '
+                       'noise, from DADApy examples/datasets/Fig2.dat')
+    else:
+        X, y = generate_spir2(n_samples=20000, noise=0.35)
+        description = 'SPIR2 (synthetic approximation - official data/spir2.csv not found)'
+
+    if return_X_y:
+        return X, y
+
+    return {
+        'data': X,
+        'target': y,
+        'n_classes': len(np.unique(y[y >= 0])),
         'n_samples': len(X),
         'n_features': X.shape[1],
         'description': description
